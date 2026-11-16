@@ -9,6 +9,7 @@ import customtkinter as ctk
 
 import netinfo
 import system
+import tunnel
 from commands import CommandProcessor
 from config import APP_NAME, VERSION, data_dir
 from server import ApiServer
@@ -27,7 +28,7 @@ OK = "#2EE59D"
 DANGER = "#FF5C7A"
 WARN = "#FFC857"
 
-SOURCE_ICON = {"voice": "🎙", "text": "⌨", "phone": "📱", "system": "⚙"}
+SOURCE_ICON = {"voice": "🎙", "text": "⌨", "phone": "📱", "system": "⚙", "claude": "🤖"}
 
 
 def F(size=14, weight="normal"):
@@ -65,6 +66,8 @@ class App(ctk.CTk):
         )
         self.server = ApiServer(cfg, self.processor,
                                 on_event=lambda src, text, res: self.events.put(("result", (src, text, res))))
+        self.tunnel = tunnel.Tunnel(lambda: cfg.get("port"),
+                                    on_status=lambda st, url="": self.events.put(("tunnel", (st, url))))
         self.tray = system.Tray(on_show=lambda: self.events.put(("show", None)),
                                 on_quit=lambda: self.events.put(("quit", None)))
 
@@ -92,6 +95,8 @@ class App(ctk.CTk):
             self.after(400, lambda: self.home.add_log("system", "Сервер для телефона не запущен",
                                                       {"ok": False, "message": str(e)}))
         self.update_status()
+        if self.server_ok and cfg.get("remote_enabled"):
+            self.tunnel.start()
 
         self._set_window_icon()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -104,6 +109,10 @@ class App(ctk.CTk):
     @property
     def home(self):
         return self.pages["home"]
+
+    def connector_url(self):
+        base = (self.cfg.get("public_url") or "").strip().rstrip("/") or self.tunnel.url
+        return f"{base}/mcp/{self.cfg.get('mcp_secret')}" if base else ""
 
     # ---------- каркас ----------
     def _set_window_icon(self):
@@ -187,6 +196,8 @@ class App(ctk.CTk):
                     self.home.add_log(source, text, res)
                     if source in ("voice", "text"):
                         self.speaker.say(res.get("message", ""))
+                elif kind == "tunnel":
+                    self.pages["settings"].set_tunnel_state(*payload)
                 elif kind == "show":
                     self.deiconify()
                     self.lift()
@@ -238,6 +249,7 @@ class App(ctk.CTk):
 
     def quit_app(self):
         self.voice.stop_continuous()
+        self.tunnel.stop()
         try:
             self.server.stop()
         except Exception:
@@ -622,6 +634,53 @@ class SettingsPage(ctk.CTkFrame):
         self._btn(row, "Настроить Windows автоматически", self._wol, accent=True)
         self._btn(row, "Папка с настройками", system.open_data_dir)
 
+        # --- коннектор Claude ---
+        c = self._card(5, "🤖  Коннектор Claude",
+                       "Claude управляет ПК прямо из чата и голосового режима — по вашей подписке, без API-ключа.")
+        ctk.CTkLabel(c, text="На этом ПК — приложение Claude для Windows", font=F(15, "bold"),
+                     text_color=TEXT).pack(anchor="w", padx=20, pady=(4, 0))
+        ctk.CTkLabel(c, text="Нажмите кнопку, затем полностью закройте Claude (через трей) и откройте снова.",
+                     font=F(13), text_color=MUTED).pack(anchor="w", padx=20)
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(8, 4))
+        self._btn(row, "Подключить к Claude Desktop", self._install_desktop, accent=True)
+        self._btn(row, "Скопировать конфиг", self._copy_desktop_config)
+        self.desktop_status = ctk.CTkLabel(c, text="", font=F(12), text_color=MUTED, justify="left")
+        self.desktop_status.pack(anchor="w", padx=20, pady=(0, 10))
+
+        ctk.CTkLabel(c, text="Через интернет — с телефона и claude.ai", font=F(15, "bold"),
+                     text_color=TEXT).pack(anchor="w", padx=20, pady=(8, 0))
+        steps = ("1. Нажмите «Установить cloudflared» (один раз).\n"
+                 "2. Включите переключатель ниже и дождитесь адреса.\n"
+                 "3. claude.ai → Настройки → Коннекторы → «Добавить свой коннектор» → вставьте адрес.\n"
+                 "Бесплатный туннель получает новый адрес после каждого перезапуска VoxPC —\n"
+                 "тогда обновите адрес коннектора в Claude (или укажите свой постоянный адрес).")
+        ctk.CTkLabel(c, text=steps, font=F(13), text_color=MUTED, justify="left").pack(anchor="w", padx=20)
+        self.remote_var = ctk.BooleanVar(value=bool(cfg.get("remote_enabled")))
+        self._switch(c, "Доступ через интернет (Cloudflare Tunnel)", self.remote_var, self._toggle_remote)
+        self.tunnel_status = ctk.CTkLabel(c, text="Выключен", font=F(13), text_color=MUTED)
+        self.tunnel_status.pack(anchor="w", padx=20)
+        self.url_entry = ctk.CTkEntry(c, height=38, corner_radius=10, font=F(13), fg_color=CARD_HI, border_width=0)
+        self.url_entry.pack(fill="x", padx=20, pady=(6, 6))
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(0, 8))
+        self._btn(row, "Скопировать адрес", lambda: self._copy(app.connector_url()) if app.connector_url()
+                  else self._toast("Адреса пока нет"), accent=True)
+        self._btn(row, "Установить cloudflared", tunnel.install_cloudflared)
+        self._btn(row, "Сменить секрет", self._regen_secret)
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(4, 6))
+        ctk.CTkLabel(row, text="Свой постоянный адрес", font=F(13), text_color=TEXT).pack(side="left")
+        self.public_entry = ctk.CTkEntry(row, width=300, height=34, corner_radius=10, fg_color=CARD_HI,
+                                         border_width=0, placeholder_text="https://my-pc.example.com")
+        if cfg.get("public_url"):
+            self.public_entry.insert(0, cfg.get("public_url"))
+        self.public_entry.pack(side="left", padx=10)
+        self._btn(row, "Сохранить", self._save_public_url)
+        ctk.CTkLabel(c, text="⚠ Любой, у кого есть этот адрес, сможет управлять ПК. Никому его не показывайте.",
+                     font=F(12), text_color=WARN).pack(anchor="w", padx=20, pady=(4, 18))
+        self._refresh_url()
+
     # --- helpers ---
     def _card(self, row, title, subtitle):
         c = ctk.CTkFrame(self.body, fg_color=CARD, corner_radius=20)
@@ -676,6 +735,67 @@ class SettingsPage(ctk.CTkFrame):
             system.run_wol_setup()
         except Exception as e:
             messagebox.showerror(APP_NAME, f"Не удалось запустить настройку: {e}")
+
+    # --- коннектор ---
+    def _install_desktop(self):
+        try:
+            paths = system.install_claude_desktop()
+            self.desktop_status.configure(text="✓ Готово. Перезапустите Claude Desktop.\n" + "\n".join(paths),
+                                          text_color=OK)
+        except Exception as e:
+            self.desktop_status.configure(text=f"Не получилось: {e}", text_color=DANGER)
+
+    def _copy_desktop_config(self):
+        import json
+        try:
+            entry = system.mcp_server_entry()
+        except Exception as e:
+            self.desktop_status.configure(text=str(e), text_color=DANGER)
+            return
+        self._copy(json.dumps({"mcpServers": {"voxpc": entry}}, ensure_ascii=False, indent=2))
+
+    def _toggle_remote(self):
+        on = self.remote_var.get()
+        self.app.cfg.set("remote_enabled", on)
+        if on:
+            if not self.app.server_ok:
+                self.set_tunnel_state("error", "Сервер VoxPC не запущен")
+                return
+            self.app.tunnel.start()
+        else:
+            self.app.tunnel.stop()
+
+    def set_tunnel_state(self, state, url):
+        texts = {"missing": ("cloudflared не найден — нажмите «Установить cloudflared», потом включите снова", DANGER),
+                 "starting": ("Запускаю туннель…", WARN),
+                 "running": ("● Работает — скопируйте адрес и добавьте его в Claude", OK),
+                 "stopped": ("Выключен", MUTED)}
+        text, color = texts.get(state, (url or "Ошибка", DANGER))
+        self.tunnel_status.configure(text=text, text_color=color)
+        if state in ("missing", "error"):
+            self.remote_var.set(False)
+            self.app.cfg.set("remote_enabled", False)
+        if state == "running":
+            self.app.home.add_log("system", "Коннектор Claude доступен через интернет", {"ok": True, "message": url})
+        self._refresh_url()
+
+    def _refresh_url(self):
+        url = self.app.connector_url()
+        self.url_entry.configure(state="normal")
+        self.url_entry.delete(0, "end")
+        self.url_entry.insert(0, url or "Адрес появится после запуска туннеля")
+        self.url_entry.configure(state="readonly")
+
+    def _save_public_url(self):
+        self.app.cfg.set("public_url", self.public_entry.get().strip())
+        self._refresh_url()
+        self._toast("Адрес сохранён")
+
+    def _regen_secret(self):
+        if messagebox.askyesno(APP_NAME, "Сменить секрет? Старый адрес коннектора перестанет работать — "
+                                         "его нужно будет обновить в Claude."):
+            self.app.cfg.regenerate_mcp_secret()
+            self._refresh_url()
 
     def _toast(self, text):
         self.app.home.hint_lbl.configure(text=text, text_color=OK)

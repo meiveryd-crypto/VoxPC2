@@ -1,4 +1,6 @@
 """Низкоуровневые действия Windows: запуск программ, питание, звук, медиа."""
+import io
+import json
 import os
 import subprocess
 import time
@@ -71,9 +73,39 @@ def launch(target: str):
         subprocess.Popen([t])
 
 
-def kill(process: str):
+def kill(process: str, force: bool = True):
     if process:
-        _run(f'taskkill /IM "{process}" /F')
+        if not process.lower().endswith(".exe"):
+            process += ".exe"
+        _run(f'taskkill /IM "{process}"' + (" /F" if force else ""))
+
+
+def open_windows():
+    """Список открытых окон: [{process, title, pid}]."""
+    if not IS_WIN:
+        return []
+    ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+          "Get-Process | Where-Object {$_.MainWindowTitle} | "
+          "Select-Object ProcessName,MainWindowTitle,Id | ConvertTo-Json -Compress")
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                         encoding="utf-8", errors="ignore", timeout=20,
+                         creationflags=CREATE_NO_WINDOW).stdout.strip()
+    if not out:
+        return []
+    data = json.loads(out)
+    if isinstance(data, dict):
+        data = [data]
+    return [{"process": d.get("ProcessName", ""), "title": d.get("MainWindowTitle", ""), "pid": d.get("Id")}
+            for d in data]
+
+
+def screenshot_jpeg(max_side: int = 1600) -> bytes:
+    from PIL import ImageGrab
+    img = ImageGrab.grab()
+    img.thumbnail((max_side, max_side))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=70)
+    return buf.getvalue()
 
 
 # ---------- питание ----------

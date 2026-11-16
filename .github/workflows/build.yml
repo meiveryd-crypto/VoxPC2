@@ -23,10 +23,13 @@ jobs:
             --add-data "setup_wol.ps1;." --collect-data customtkinter `
             --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 `
             --hidden-import pystray._win32 main.py
+          python -m PyInstaller --noconfirm --onefile --console --name VoxPC-MCP --icon icon.ico voxpc_mcp.py
       - uses: actions/upload-artifact@v4
         with:
           name: VoxPC-Windows
-          path: windows/dist/VoxPC.exe
+          path: |
+            windows/dist/VoxPC.exe
+            windows/dist/VoxPC-MCP.exe
 
   android:
     runs-on: ubuntu-latest

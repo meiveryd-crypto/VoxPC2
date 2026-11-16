@@ -118,3 +118,49 @@ class Tray:
                 self.icon.stop()
         except Exception:
             pass
+
+
+# ---------- Claude Desktop ----------
+def claude_desktop_config_paths():
+    """Файлы настроек Claude Desktop (обычная установка и версия из Microsoft Store)."""
+    from pathlib import Path
+    paths = [Path(os.getenv("APPDATA") or Path.home()) / "Claude" / "claude_desktop_config.json"]
+    packages = Path(os.getenv("LOCALAPPDATA") or "") / "Packages"
+    if packages.is_dir():
+        for pkg in packages.glob("*Claude*"):
+            roaming = pkg / "LocalCache" / "Roaming" / "Claude"
+            if roaming.is_dir():
+                paths.append(roaming / "claude_desktop_config.json")
+    return paths
+
+
+def mcp_server_entry():
+    """Команда запуска моста VoxPC для Claude Desktop."""
+    from pathlib import Path
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).with_name("VoxPC-MCP.exe")
+        if not exe.is_file():
+            raise FileNotFoundError("Положите VoxPC-MCP.exe в ту же папку, что и VoxPC.exe")
+        return {"command": str(exe), "args": []}
+    py = sys.executable.replace("pythonw.exe", "python.exe")
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voxpc_mcp.py")
+    return {"command": py, "args": [script]}
+
+
+def install_claude_desktop():
+    import json
+    entry = mcp_server_entry()
+    written = []
+    for path in claude_desktop_config_paths():
+        data = {}
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8") or "{}")
+            except ValueError:
+                path.with_suffix(".json.bak").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                data = {}
+        data.setdefault("mcpServers", {})["voxpc"] = entry
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        written.append(str(path))
+    return written

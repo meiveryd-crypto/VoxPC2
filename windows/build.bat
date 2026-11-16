@@ -18,6 +18,8 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name VoxPC ^
   --hidden-import pystray._win32 ^
   main.py
 
+python -m PyInstaller --noconfirm --onefile --console --name VoxPC-MCP --icon icon.ico voxpc_mcp.py
+
 echo.
-echo Готово: dist\VoxPC.exe
+echo Готово: dist\VoxPC.exe и dist\VoxPC-MCP.exe (держите их в одной папке)
 pause

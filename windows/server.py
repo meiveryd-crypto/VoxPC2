@@ -13,6 +13,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import netinfo
+from mcp_server import McpHandler
 from config import DISCOVERY_PORT, VERSION
 
 DISCOVER_MAGIC = b"VOXPC_DISCOVER"
@@ -23,6 +24,7 @@ class ApiServer:
         self.config = config
         self.processor = processor
         self.on_event = on_event or (lambda *a: None)
+        self.mcp = McpHandler(config, processor, self.on_event)
         self.httpd = None
         self._stop = threading.Event()
 
@@ -52,8 +54,36 @@ class ApiServer:
             def _path(self):
                 return self.path.split("?", 1)[0].rstrip("/")
 
+            def _via_tunnel(self):
+                return bool(self.headers.get("Cf-Ray") or self.headers.get("Cf-Connecting-Ip"))
+
+            def _mcp_ok(self, path):
+                secret = str(api.config.get("mcp_secret") or "")
+                given = path[len("/mcp/"):] if path.startswith("/mcp/") else ""
+                return bool(secret) and hmac.compare_digest(given, secret)
+
+            def _guard(self, path):
+                """Через интернет-туннель доступен только коннектор Claude."""
+                if path.startswith("/mcp/"):
+                    if not self._mcp_ok(path):
+                        self._send(404, {"error": "not found"})
+                        return False
+                    return True
+                if self._via_tunnel():
+                    self._send(403, {"ok": False, "message": "Forbidden"})
+                    return False
+                return True
+
             def do_GET(self):
                 path = self._path()
+                if not self._guard(path):
+                    return
+                if path.startswith("/mcp/"):
+                    self.send_response(405)
+                    self.send_header("Allow", "POST")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if path == "/api/ping":
                     return self._send(200, {"name": netinfo.hostname(), "version": VERSION,
                                             "auth": self._is_auth()})
@@ -64,7 +94,38 @@ class ApiServer:
                                             for a in api.config.apps])
                 self._send(404, {"ok": False, "message": "Not found"})
 
+            def _mcp_post(self):
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    msg = json.loads(self.rfile.read(length).decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    return self._send(400, {"jsonrpc": "2.0", "id": None,
+                                            "error": {"code": -32700, "message": "Parse error"}})
+                if isinstance(msg, list):
+                    replies = [r for r in (api.mcp.handle(m) for m in msg) if r is not None]
+                else:
+                    r = api.mcp.handle(msg)
+                    replies = r
+                if not replies:
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self._send(200, replies)
+
+            def do_DELETE(self):
+                path = self._path()
+                if self._guard(path):
+                    self.send_response(405)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
             def do_POST(self):
+                path = self._path()
+                if not self._guard(path):
+                    return
+                if path.startswith("/mcp/"):
+                    return self._mcp_post()
                 if not self._is_auth():
                     return self._send(401, {"ok": False, "message": "Неверный код доступа"})
                 try:
@@ -72,7 +133,6 @@ class ApiServer:
                     data = json.loads(self.rfile.read(length) or b"{}") if length else {}
                 except (ValueError, json.JSONDecodeError):
                     return self._send(400, {"ok": False, "message": "Некорректный запрос"})
-                path = self._path()
                 try:
                     if path == "/api/command":
                         text = str(data.get("text", ""))

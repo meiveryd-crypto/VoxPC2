@@ -4,6 +4,7 @@ import difflib
 import re
 
 import actions
+import programs
 
 OPEN_WORDS = ("открой", "открыть", "запусти", "запустить", "включи", "включить",
               "поиграем в", "поиграть в", "давай", "покажи")
@@ -60,6 +61,13 @@ class CommandProcessor:
             return ok(f"Открываю {app['name']}", "open_app")
         except Exception as e:
             return fail(f"Не удалось открыть {app['name']}: {e}")
+
+    def open_program(self, prog):
+        try:
+            actions.launch(prog["path"])
+            return ok(f"Открываю {prog['name']}", "open_app")
+        except Exception as e:
+            return fail(f"Не удалось открыть {prog['name']}: {e}")
 
     def close_app(self, app):
         if not app.get("process"):
@@ -185,6 +193,9 @@ class CommandProcessor:
                 app = self.find_app(rest)
                 if app:
                     return self.open_app(app)
+                found = programs.find(rest, limit=1)
+                if found:
+                    return self.open_program(found[0])
                 return fail(f"Не нашёл приложение «{rest}». Добавьте его во вкладке «Приложения»")
 
         # просто название приложения

@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 APP_NAME = "VoxPC"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 HTTP_PORT = 47800
 DISCOVERY_PORT = 47801
 
@@ -62,6 +62,9 @@ DEFAULTS = {
     "tts": True,
     "always_listen": False,
     "start_minimized": False,
+    "mcp_secret": "",
+    "remote_enabled": False,
+    "public_url": "",
     "apps": DEFAULT_APPS,
 }
 
@@ -89,6 +92,8 @@ class Config:
             data.setdefault(key, copy.deepcopy(value))
         if not data.get("token"):
             data["token"] = new_token()
+        if not data.get("mcp_secret"):
+            data["mcp_secret"] = secrets.token_urlsafe(24)
         self.data = data
         self.save()
 
@@ -114,6 +119,11 @@ class Config:
 
     def set_apps(self, apps):
         self.set("apps", apps)
+
+    def regenerate_mcp_secret(self) -> str:
+        secret = secrets.token_urlsafe(24)
+        self.set("mcp_secret", secret)
+        return secret
 
     def regenerate_token(self) -> str:
         token = new_token()
