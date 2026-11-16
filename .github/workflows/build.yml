@@ -1,0 +1,48 @@
+# Автосборка VoxPC.exe и VoxPC.apk на GitHub (вкладка Actions → артефакты)
+name: Build VoxPC
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build exe
+        working-directory: windows
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements.txt
+          python -c "import system; system.save_ico('icon.ico')"
+          python -m PyInstaller --noconfirm --onefile --windowed --name VoxPC --icon icon.ico `
+            --add-data "setup_wol.ps1;." --collect-data customtkinter `
+            --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 `
+            --hidden-import pystray._win32 main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoxPC-Windows
+          path: windows/dist/VoxPC.exe
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Build apk
+        working-directory: android
+        run: gradle :app:assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoxPC-Android
+          path: android/app/build/outputs/apk/release/*.apk
