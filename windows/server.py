@@ -20,10 +20,12 @@ DISCOVER_MAGIC = b"VOXPC_DISCOVER"
 
 
 class ApiServer:
-    def __init__(self, config, processor, on_event=None):
+    def __init__(self, config, processor, on_event=None, command_handler=None, on_show=None):
         self.config = config
         self.processor = processor
         self.on_event = on_event or (lambda *a: None)
+        self.command_handler = command_handler or processor.execute
+        self.on_show = on_show or (lambda: None)
         self.mcp = McpHandler(config, processor, self.on_event)
         self.httpd = None
         self._stop = threading.Event()
@@ -78,6 +80,11 @@ class ApiServer:
                 path = self._path()
                 if not self._guard(path):
                     return
+                if path == "/local/show":
+                    if self.client_address[0] == "127.0.0.1":
+                        api.on_show()
+                        return self._send(200, {"ok": True})
+                    return self._send(403, {"ok": False})
                 if path.startswith("/mcp/"):
                     self.send_response(405)
                     self.send_header("Allow", "POST")
@@ -136,7 +143,7 @@ class ApiServer:
                 try:
                     if path == "/api/command":
                         text = str(data.get("text", ""))
-                        res = api.processor.execute(text)
+                        res = api.command_handler(text)
                         api.on_event("phone", text, res)
                         return self._send(200, res)
                     if path == "/api/action":

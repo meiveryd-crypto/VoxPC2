@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+import brain
 import netinfo
 import system
 import tunnel
@@ -64,8 +65,11 @@ class App(ctk.CTk):
             on_state=lambda s, msg="": self.events.put(("voice_state", (s, msg))),
             wake_word_fn=lambda: cfg.get("wake_word"),
         )
+        self.brain = brain.ClaudeBrain(cfg)
         self.server = ApiServer(cfg, self.processor,
-                                on_event=lambda src, text, res: self.events.put(("result", (src, text, res))))
+                                on_event=lambda src, text, res: self.events.put(("result", (src, text, res))),
+                                command_handler=self.handle_text,
+                                on_show=lambda: self.events.put(("show", None)))
         self.tunnel = tunnel.Tunnel(lambda: cfg.get("port"),
                                     on_status=lambda st, url="": self.events.put(("tunnel", (st, url))))
         self.tray = system.Tray(on_show=lambda: self.events.put(("show", None)),
@@ -196,6 +200,11 @@ class App(ctk.CTk):
                     self.home.add_log(source, text, res)
                     if source in ("voice", "text"):
                         self.speaker.say(res.get("message", ""))
+                elif kind == "thinking":
+                    if payload:
+                        self.home.set_voice_state("processing", "Claude думает…")
+                    else:
+                        self.home.set_voice_state("idle", "")
                 elif kind == "tunnel":
                     self.pages["settings"].set_tunnel_state(*payload)
                 elif kind == "show":
@@ -209,16 +218,33 @@ class App(ctk.CTk):
             pass
         self.after(100, self._poll)
 
+    def handle_text(self, text):
+        """Выполняет фразу: сначала быстрые локальные команды, остальное — через Claude."""
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "message": "Пустая команда"}
+        try:
+            if not self.cfg.get("brain_enabled"):
+                return self.processor.execute(text)
+            if self.cfg.get("brain_fast_local"):
+                local = self.processor.execute(text, strict=True)
+                if local.get("ok"):
+                    return local
+            self.events.put(("thinking", True))
+            try:
+                return self.brain.ask(text)
+            finally:
+                self.events.put(("thinking", False))
+        except Exception as e:
+            return {"ok": False, "message": f"Ошибка: {e}"}
+
     def run_command(self, text, source):
         text = (text or "").strip()
         if not text:
             return
 
         def work():
-            try:
-                res = self.processor.execute(text)
-            except Exception as e:
-                res = {"ok": False, "message": f"Ошибка: {e}"}
+            res = self.handle_text(text)
             self.events.put(("result", (source, text, res)))
 
         threading.Thread(target=work, daemon=True).start()
@@ -578,8 +604,36 @@ class SettingsPage(ctk.CTkFrame):
         ctk.CTkLabel(self.body, text="Настройки", font=F(30, "bold"), text_color=TEXT).grid(
             row=0, column=0, sticky="w", pady=(0, 16))
 
+        # --- мозг ---
+        c = self._card(1, "🧠  Мозг: Claude",
+                       "VoxPC передаёт ваши команды Claude, а Claude сам решает, что сделать, выполняет и отвечает "
+                       "голосом. Работает по вашей подписке через Claude Code.")
+        self.brain_status = ctk.CTkLabel(c, text="", font=F(13), text_color=MUTED, justify="left")
+        self.brain_status.pack(anchor="w", padx=20)
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(8, 6))
+        self._btn(row, "1. Установить Claude Code", self._brain_install)
+        self._btn(row, "2. Войти в аккаунт", self._brain_login)
+        self._btn(row, "3. Проверить", self._brain_test, accent=True)
+        self.brain_var = ctk.BooleanVar(value=bool(cfg.get("brain_enabled")))
+        self._switch(c, "Использовать Claude как мозг VoxPC", self.brain_var,
+                     lambda: cfg.set("brain_enabled", self.brain_var.get()))
+        self.fast_var = ctk.BooleanVar(value=bool(cfg.get("brain_fast_local")))
+        self._switch(c, "Простые команды («открой стим», «громче») выполнять сразу, без Claude — быстрее",
+                     self.fast_var, lambda: cfg.set("brain_fast_local", self.fast_var.get()))
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(4, 18))
+        ctk.CTkLabel(row, text="Модель", font=F(14), text_color=TEXT).pack(side="left")
+        names = list(brain.MODELS.values())
+        self.model_menu = ctk.CTkOptionMenu(
+            row, values=names, width=200, fg_color=CARD_HI, button_color=ACCENT, button_hover_color=ACCENT_HI,
+            command=lambda v: cfg.set("brain_model", next(k for k, n in brain.MODELS.items() if n == v)))
+        self.model_menu.set(brain.MODELS.get(cfg.get("brain_model"), names[0]))
+        self.model_menu.pack(side="left", padx=12)
+        self._refresh_brain_status()
+
         # --- подключение ---
-        c = self._card(1, "📱  Подключение телефона",
+        c = self._card(2, "📱  Подключение телефона",
                        "Нажмите «Найти ПК» в приложении на телефоне или введите эти данные вручную.")
         grid = ctk.CTkFrame(c, fg_color="transparent")
         grid.pack(fill="x", padx=20, pady=(4, 18))
@@ -597,7 +651,7 @@ class SettingsPage(ctk.CTkFrame):
         threading.Thread(target=self._load_mac, daemon=True).start()
 
         # --- голос ---
-        c = self._card(2, "🎙  Голос", "Ключевое слово нужно в режиме постоянного прослушивания.")
+        c = self._card(3, "🎙  Голос", "Ключевое слово нужно в режиме постоянного прослушивания.")
         row = ctk.CTkFrame(c, fg_color="transparent")
         row.pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkLabel(row, text="Ключевое слово", font=F(14), text_color=TEXT).pack(side="left")
@@ -612,7 +666,7 @@ class SettingsPage(ctk.CTkFrame):
                   pack=dict(anchor="w", padx=20, pady=(4, 18)))
 
         # --- запуск ---
-        c = self._card(3, "🚀  Запуск", "Чтобы телефон мог управлять ПК, VoxPC должен работать в фоне.")
+        c = self._card(4, "🚀  Запуск", "Чтобы телефон мог управлять ПК, VoxPC должен работать в фоне.")
         self.auto_var = ctk.BooleanVar(value=system.autostart_enabled() if os.name == "nt" else False)
         self._switch(c, "Запускать вместе с Windows", self.auto_var, self._toggle_autostart)
         self.min_var = ctk.BooleanVar(value=bool(cfg.get("start_minimized")))
@@ -620,7 +674,7 @@ class SettingsPage(ctk.CTkFrame):
                      lambda: cfg.set("start_minimized", self.min_var.get()), last=True)
 
         # --- WoL ---
-        c = self._card(4, "⚡  Удалённое включение (Wake-on-LAN)", "")
+        c = self._card(5, "⚡  Удалённое включение (Wake-on-LAN)", "")
         steps = ("1. В BIOS/UEFI включите «Wake on LAN» / «Power On by PCI-E» (и отключите ErP/EuP).\n"
                  "2. Нажмите кнопку ниже — VoxPC сам настроит сетевую карту, отключит «Быстрый запуск»\n"
                  "    и откроет порты в брандмауэре (нужны права администратора).\n"
@@ -635,7 +689,7 @@ class SettingsPage(ctk.CTkFrame):
         self._btn(row, "Папка с настройками", system.open_data_dir)
 
         # --- коннектор Claude ---
-        c = self._card(5, "🤖  Коннектор Claude",
+        c = self._card(6, "🤖  Коннектор Claude",
                        "Claude управляет ПК прямо из чата и голосового режима — по вашей подписке, без API-ключа.")
         ctk.CTkLabel(c, text="На этом ПК — приложение Claude для Windows", font=F(15, "bold"),
                      text_color=TEXT).pack(anchor="w", padx=20, pady=(4, 0))
@@ -735,6 +789,50 @@ class SettingsPage(ctk.CTkFrame):
             system.run_wol_setup()
         except Exception as e:
             messagebox.showerror(APP_NAME, f"Не удалось запустить настройку: {e}")
+
+    # --- мозг ---
+    def _refresh_brain_status(self):
+        exe = brain.find_claude()
+        if exe:
+            self.brain_status.configure(text=f"✓ Claude Code найден: {exe}", text_color=OK)
+        else:
+            self.brain_status.configure(text="Claude Code не установлен — нажмите «1. Установить Claude Code»",
+                                        text_color=WARN)
+
+    def _brain_install(self):
+        brain.install_claude_code()
+        self.brain_status.configure(text="Идёт установка в отдельном окне. Когда закончится — нажмите "
+                                         "«2. Войти в аккаунт».", text_color=WARN)
+        self.after(15000, self._refresh_brain_status)
+
+    def _brain_login(self):
+        try:
+            brain.login_claude_code()
+            self.brain_status.configure(
+                text="В открывшемся окне войдите через аккаунт Claude (подписка Pro), затем закройте окно\n"
+                     "и нажмите «3. Проверить».", text_color=WARN)
+        except Exception as e:
+            self.brain_status.configure(text=str(e), text_color=DANGER)
+
+    def _brain_test(self):
+        self.brain_status.configure(text="Проверяю… (до 30 секунд)", text_color=WARN)
+
+        def work():
+            self.app.brain.reset()
+            res = self.app.brain.ask("Это проверка связи. Ответь одним словом: Готово.")
+            self.app.brain.reset()
+
+            def show():
+                if res.get("ok"):
+                    self.brain_status.configure(text=f"✓ Claude отвечает: {res['message']}", text_color=OK)
+                    if not self.brain_var.get():
+                        self.brain_var.set(True)
+                        self.app.cfg.set("brain_enabled", True)
+                else:
+                    self.brain_status.configure(text=res.get("message", "Ошибка"), text_color=DANGER)
+            self.after(0, show)
+
+        threading.Thread(target=work, daemon=True).start()
 
     # --- коннектор ---
     def _install_desktop(self):

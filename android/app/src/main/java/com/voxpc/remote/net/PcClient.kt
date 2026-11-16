@@ -62,7 +62,8 @@ class PcClient(private val prefs: Prefs) {
         }
     }
 
-    suspend fun command(text: String) = post("/api/command", JSONObject().put("text", text))
+    // Claude может думать до минуты
+    suspend fun command(text: String) = post("/api/command", JSONObject().put("text", text), timeout = 90000)
 
     suspend fun action(action: String, app: String? = null): CommandResult {
         val body = JSONObject().put("action", action)
@@ -70,10 +71,10 @@ class PcClient(private val prefs: Prefs) {
         return post("/api/action", body)
     }
 
-    private suspend fun post(path: String, body: JSONObject): CommandResult = withContext(Dispatchers.IO) {
+    private suspend fun post(path: String, body: JSONObject, timeout: Int = 8000): CommandResult = withContext(Dispatchers.IO) {
         if (prefs.host.isBlank()) return@withContext CommandResult(false, "Сначала подключите ПК в настройках")
         try {
-            val (code, text) = request("POST", path, body)
+            val (code, text) = request("POST", path, body, timeout)
             if (code == 401) return@withContext CommandResult(false, "Неверный код доступа")
             val j = JSONObject(text)
             CommandResult(j.optBoolean("ok"), j.optString("message"))

@@ -104,13 +104,16 @@ class CommandProcessor:
         return fail(f"Неизвестное действие: {name}")
 
     # ---------- текстовая команда ----------
-    def execute(self, text: str):
+    def execute(self, text: str, strict: bool = False):
+        """strict=True: выполнять только короткие однозначные команды (остальное — для Claude)."""
         t = normalize(text)
         wake = normalize(self.config.get("wake_word") or "")
         if wake and t.startswith(wake):
             t = t[len(wake):].strip(" ,")
         if not t:
             return fail("Пустая команда")
+        if strict and (len(t.split()) > 5 or re.search(r"\b(и|потом|затем|а также|после)\b", t)):
+            return fail("Сложная команда")
 
         def has(*ws):
             return any(w in t for w in ws)
@@ -182,6 +185,8 @@ class CommandProcessor:
         # закрыть приложение
         for w in CLOSE_WORDS:
             if t.startswith(w + " "):
+                if strict and len(t[len(w):].split()) > 3:
+                    break
                 app = self.find_app(t[len(w):])
                 if app:
                     return self.close_app(app)
@@ -190,6 +195,8 @@ class CommandProcessor:
         for w in sorted(OPEN_WORDS, key=len, reverse=True):
             if t.startswith(w + " "):
                 rest = t[len(w):].strip()
+                if strict and len(rest.split()) > 3:
+                    return fail("Сложная команда")
                 app = self.find_app(rest)
                 if app:
                     return self.open_app(app)
@@ -199,6 +206,8 @@ class CommandProcessor:
                 return fail(f"Не нашёл приложение «{rest}». Добавьте его во вкладке «Приложения»")
 
         # просто название приложения
+        if strict and len(t.split()) > 2:
+            return fail("Не понял команду")
         app = self.find_app(t)
         if app:
             return self.open_app(app)

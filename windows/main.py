@@ -14,10 +14,25 @@ def already_running() -> bool:
     return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
 
 
+def show_running_instance() -> bool:
+    """Просит уже запущенный VoxPC показать окно."""
+    try:
+        import json
+        import urllib.request
+        from config import CONFIG_PATH
+        port = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("port", 47800)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        opener.open(f"http://127.0.0.1:{port}/local/show", timeout=3).read()
+        return True
+    except Exception:
+        return False
+
+
 def main():
     if already_running():
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(0, "VoxPC уже запущен — ищите значок в трее.", "VoxPC", 0x40)
+        if "--minimized" not in sys.argv and not show_running_instance():
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, "VoxPC уже запущен — ищите значок в трее.", "VoxPC", 0x40)
         return
 
     from config import Config
