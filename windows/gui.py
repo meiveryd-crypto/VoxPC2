@@ -65,7 +65,9 @@ class App(ctk.CTk):
         self.busy = False
         self.companion = None
         self.speaker = Speaker(lambda: cfg.get("tts"), engine_fn=lambda: cfg.get("tts_engine") or "edge",
-                               on_speaking=lambda v: self.events.put(("speaking", v)))
+                               on_speaking=lambda v: self.events.put(("speaking", v)),
+                               settings_fn=lambda: {k: cfg.get(k) for k in
+                                                    ("elevenlabs_key", "elevenlabs_voice", "elevenlabs_model")})
         self.observer = observer_mod.Observer(lambda kind, snap: self.events.put(("observer", (kind, snap))))
         self.voice = VoiceListener(
             on_text=lambda t, manual: self.events.put(("voice_text", t)),
@@ -707,7 +709,8 @@ class SettingsPage(ctk.CTkFrame):
                                                    "30": "раз в 30 мин"},
                      str(int(cfg.get("companion_roam_minutes") or 3)),
                      lambda v: cfg.set("companion_roam_minutes", int(v)))
-        self._option(grid, 3, "Голос", {"edge": "Нейроголос Глитч", "sapi": "Голос Windows"},
+        self._option(grid, 3, "Голос", {"elevenlabs": "ElevenLabs (голос Глитч)", "edge": "Нейроголос Microsoft",
+                                        "sapi": "Голос Windows"},
                      cfg.get("tts_engine") or "edge", lambda v: cfg.set("tts_engine", v))
         for key, text in (("companion_roam", "Сама перемещается и садится на окна"),
                           ("companion_screens", "Смотрит на экран (снимки экрана отправляются Claude для комментариев)"),
@@ -720,6 +723,29 @@ class SettingsPage(ctk.CTkFrame):
         self._btn(row, "Позвать домой", lambda: app.companion and app.companion.go_home())
         self._btn(row, "Скажи что-нибудь", lambda: app.companion and app.companion.initiate("idle", force=True))
         self._btn(row, "Проверить голос", lambda: app.speaker.say("Мрр. Привет, это Глитч!", force=True))
+
+        # ElevenLabs
+        ctk.CTkLabel(c, text="ElevenLabs", font=F(15, "bold"), text_color=TEXT).pack(anchor="w", padx=20, pady=(0, 2))
+        ctk.CTkLabel(c, text="Вставьте API-ключ (elevenlabs.io → профиль → API Keys) и Voice ID голоса Глитч.",
+                     font=F(12), text_color=MUTED).pack(anchor="w", padx=20)
+        el = ctk.CTkFrame(c, fg_color="transparent")
+        el.pack(fill="x", padx=20, pady=(6, 4))
+        ctk.CTkLabel(el, text="API-ключ", font=F(13), text_color=TEXT, width=80, anchor="w").grid(row=0, column=0)
+        self.el_key = ctk.CTkEntry(el, width=360, height=34, corner_radius=10, fg_color=CARD_HI, border_width=0,
+                                   show="•", placeholder_text="sk_…")
+        if cfg.get("elevenlabs_key"):
+            self.el_key.insert(0, cfg.get("elevenlabs_key"))
+        self.el_key.grid(row=0, column=1, padx=10, pady=3, sticky="w")
+        ctk.CTkLabel(el, text="Voice ID", font=F(13), text_color=TEXT, width=80, anchor="w").grid(row=1, column=0)
+        self.el_voice = ctk.CTkEntry(el, width=360, height=34, corner_radius=10, fg_color=CARD_HI, border_width=0)
+        if cfg.get("elevenlabs_voice"):
+            self.el_voice.insert(0, cfg.get("elevenlabs_voice"))
+        self.el_voice.grid(row=1, column=1, padx=10, pady=3, sticky="w")
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(4, 4))
+        self._btn(row, "Сохранить и проверить", self._eleven_save, accent=True)
+        self.el_status = ctk.CTkLabel(c, text="", font=F(12), text_color=MUTED, justify="left")
+        self.el_status.pack(anchor="w", padx=20, pady=(0, 18))
 
         # --- подключение ---
         c = self._card(3, "📱  Подключение телефона",
@@ -888,6 +914,28 @@ class SettingsPage(ctk.CTkFrame):
                                  command=lambda v: on_change(next(k for k, n in choices.items() if n == v)))
         menu.set(choices.get(current, names[0]))
         menu.grid(row=row, column=1, sticky="w", padx=12, pady=4)
+
+    def _eleven_save(self):
+        cfg = self.app.cfg
+        cfg.set("elevenlabs_key", self.el_key.get().strip())
+        cfg.set("elevenlabs_voice", self.el_voice.get().strip())
+        self.el_status.configure(text="Проверяю…", text_color=WARN)
+
+        def work():
+            try:
+                self.app.speaker.eleven_synth("Мрр. Проверка голоса.")
+                ok, msg = True, "✓ Голос работает. Выбрана озвучка ElevenLabs."
+            except Exception as e:
+                ok, msg = False, str(e)
+
+            def show():
+                self.el_status.configure(text=msg, text_color=OK if ok else DANGER)
+                if ok:
+                    cfg.set("tts_engine", "elevenlabs")
+                    self.app.speaker.say("Мрр. Ну как тебе мой новый голос?", force=True)
+            self.after(0, show)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def sync_companion(self):
         self.cat_var.set(bool(self.app.cfg.get("companion_enabled")))

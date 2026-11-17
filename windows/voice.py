@@ -1,5 +1,6 @@
 """Распознавание речи (Google Speech, русский) и озвучка ответов."""
 import queue
+import urllib.error
 import threading
 import time
 
@@ -151,9 +152,11 @@ class Speaker:
     on_speaking(True/False) сообщает, когда идёт речь (для анимации рта).
     """
 
-    def __init__(self, enabled_fn, engine_fn=lambda: "edge", on_speaking=None):
+    def __init__(self, enabled_fn, engine_fn=lambda: "edge", on_speaking=None, settings_fn=lambda: {}):
         self.enabled_fn = enabled_fn
         self.engine_fn = engine_fn
+        self.settings_fn = settings_fn
+        self.last_error = ""
         self.on_speaking = on_speaking or (lambda v: None)
         self.q = queue.Queue()
         self.speaking = False
@@ -196,6 +199,56 @@ class Speaker:
         except Exception:
             return False
 
+    # ---------- ElevenLabs ----------
+    def eleven_synth(self, text: str) -> bytes:
+        """Синтез через ElevenLabs API. Короткие фразы кэшируются, чтобы не тратить кредиты."""
+        import hashlib
+        import json as _json
+        import urllib.request
+        from config import data_dir
+        st = self.settings_fn() or {}
+        key, vid = (st.get("elevenlabs_key") or "").strip(), (st.get("elevenlabs_voice") or "").strip()
+        if not key or not vid:
+            raise ValueError("Не указан API-ключ или Voice ID ElevenLabs")
+        model = st.get("elevenlabs_model") or "eleven_multilingual_v2"
+        cache_dir = data_dir() / "tts_cache"
+        cache = cache_dir / (hashlib.sha1(f"{vid}|{model}|{text}".encode("utf-8")).hexdigest() + ".mp3")
+        if cache.exists():
+            return cache.read_bytes()
+        body = {"text": text, "model_id": model,
+                "voice_settings": {"stability": 0.38, "similarity_boost": 0.8, "style": 0.45,
+                                   "use_speaker_boost": True}}
+        req = urllib.request.Request(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{vid}?output_format=mp3_44100_128",
+            data=_json.dumps(body).encode("utf-8"), method="POST",
+            headers={"xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg"})
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                audio = r.read()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:200]
+            raise RuntimeError(f"ElevenLabs {e.code}: {detail}")
+        if len(text) <= 80:
+            cache_dir.mkdir(exist_ok=True)
+            cache.write_bytes(audio)
+        return audio
+
+    def _eleven(self, text: str) -> bool:
+        import os
+        import tempfile
+        try:
+            audio = self.eleven_synth(text)
+            path = os.path.join(tempfile.gettempdir(), "voxpc_tts_el.mp3")
+            with open(path, "wb") as f:
+                f.write(audio)
+            self.last_error = ""
+            self._set(True)
+            _play_mp3(path)
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            return False
+
     def _set(self, value):
         self.speaking = value
         try:
@@ -208,7 +261,10 @@ class Speaker:
         while True:
             text = self.q.get()
             try:
-                done = self.engine_fn() == "edge" and self._edge(text)
+                engine = self.engine_fn()
+                done = engine == "elevenlabs" and self._eleven(text)
+                if not done and engine in ("edge", "elevenlabs"):
+                    done = self._edge(text)
                 if not done:
                     if sapi is None:
                         sapi = self._sapi_engine() or False
