@@ -92,10 +92,23 @@ class VoiceListener:
     def stop_continuous(self):
         self._stop.set()
 
+    def _calibrate_maybe(self, source):
+        """Не даём порогу громкости «уползти» вверх из-за звука игры: иногда перенастраиваемся."""
+        now = time.time()
+        if now - getattr(self, "_last_cal", 0) > 120:
+            self._last_cal = now
+            try:
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.6)
+                self.recognizer.energy_threshold = min(self.recognizer.energy_threshold, 2500)
+            except Exception:
+                pass
+
     def _loop(self):
         try:
             with sr.Microphone() as source:
                 self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                self.recognizer.energy_threshold = min(self.recognizer.energy_threshold, 2500)
+                self._last_cal = time.time()
                 self.on_state("idle", "Жду ключевое слово…")
                 while not self._stop.is_set():
                     try:
@@ -106,6 +119,7 @@ class VoiceListener:
                     try:
                         text = self.recognizer.recognize_google(audio, language="ru-RU")
                     except sr.UnknownValueError:
+                        self._calibrate_maybe(source)
                         if manual:
                             self._manual_next = False
                             self.on_state("idle", "Не расслышал")
@@ -124,6 +138,9 @@ class VoiceListener:
                     if manual or found:
                         self.on_state("idle", "Жду ключевое слово…")
                         self.on_text(rest if found else text, manual)
+                    else:
+                        heard = text if len(text) <= 60 else text[:57] + "…"
+                        self.on_state("idle", f"Жду ключевое слово… Услышала: «{heard}»")
         except OSError:
             self.on_state("error", "Микрофон не найден")
         except Exception as e:

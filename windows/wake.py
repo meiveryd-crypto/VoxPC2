@@ -26,19 +26,24 @@ def _similar(a: str, b: str) -> bool:
 def split(text: str, setting: str):
     """Возвращает (найдено ли ключевое слово, остаток фразы без него).
 
-    Ключевое слово ищется в начале фразы (первые одно-два слова) с допуском на ошибки распознавания:
-    «Вокс, открой стим», «фокс открой стим», «эй вокс открой стим».
+    Ключевое слово ищется в любом месте фразы с допуском на ошибки распознавания: при фоновом шуме
+    (игра, музыка) запись режется на куски, и слово часто оказывается в середине.
+    «Вокс, открой стим», «фокс открой стим», «…и тут вокс громче» -> команда после ключевого слова.
     """
     t = norm(text)
     ws = words(setting)
     if not t or not ws:
         return False, t
     toks = t.split()
+    best = None
     for w in ws:
-        wt = w.split()
-        n = len(wt)
-        for start in (0, 1):                     # допускаем «эй/ну/слушай» перед словом
-            chunk = toks[start:start + n]
-            if len(chunk) == n and _similar(" ".join(chunk), w):
-                return True, " ".join(toks[start + n:])
-    return False, t
+        n = len(w.split())
+        for start in range(0, len(toks) - n + 1):
+            if _similar(" ".join(toks[start:start + n]), w):
+                if best is None or start < best[0]:
+                    best = (start, n)
+                break
+    if best is None:
+        return False, t
+    start, n = best
+    return True, " ".join(toks[start + n:])
