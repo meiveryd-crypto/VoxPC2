@@ -5,6 +5,8 @@ import queue
 import threading
 from tkinter import filedialog, messagebox
 
+import tkinter as tk
+
 import customtkinter as ctk
 
 import brain
@@ -112,6 +114,7 @@ class App(ctk.CTk):
             self.tunnel.start()
 
         self._set_window_icon()
+        self._install_clipboard_fix()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._poll)
         if cfg.get("always_listen"):
@@ -120,6 +123,38 @@ class App(ctk.CTk):
             self.after(1500, lambda: self.set_companion(True))
         if minimized:
             self.after(60, self.withdraw if self.tray.available else self.iconify)
+
+    def _install_clipboard_fix(self):
+        """Ctrl+V/C/X/A при русской раскладке и меню «Вставить» по правому клику в полях ввода."""
+        codes = {86: "<<Paste>>", 67: "<<Copy>>", 88: "<<Cut>>"}
+
+        def on_ctrl(e):
+            if e.keysym.lower() in ("v", "c", "x", "a"):
+                return None  # латинская раскладка — Tk справится сам
+            w = e.widget
+            if e.keycode in codes:
+                w.event_generate(codes[e.keycode])
+                return "break"
+            if e.keycode == 65:
+                try:
+                    w.select_range(0, "end")
+                    w.icursor("end")
+                except Exception:
+                    pass
+                return "break"
+            return None
+
+        def on_menu(e):
+            w = e.widget
+            m = tk.Menu(self, tearoff=0, bg=CARD, fg=TEXT, activebackground=ACCENT, bd=0)
+            m.add_command(label="Вставить", command=lambda: w.event_generate("<<Paste>>"))
+            m.add_command(label="Копировать", command=lambda: w.event_generate("<<Copy>>"))
+            m.add_command(label="Вырезать", command=lambda: w.event_generate("<<Cut>>"))
+            m.tk_popup(e.x_root, e.y_root)
+
+        for cls in ("Entry", "Text"):
+            self.bind_class(cls, "<Control-KeyPress>", on_ctrl, add="+")
+            self.bind_class(cls, "<Button-3>", on_menu, add="+")
 
     @property
     def home(self):
@@ -736,6 +771,8 @@ class SettingsPage(ctk.CTkFrame):
         if cfg.get("elevenlabs_key"):
             self.el_key.insert(0, cfg.get("elevenlabs_key"))
         self.el_key.grid(row=0, column=1, padx=10, pady=3, sticky="w")
+        ctk.CTkButton(el, text="Вставить", width=90, height=34, corner_radius=10, fg_color=CARD_HI,
+                      hover_color=ACCENT, command=lambda: self._paste_into(self.el_key)).grid(row=0, column=2)
         ctk.CTkLabel(el, text="Voice ID", font=F(13), text_color=TEXT, width=80, anchor="w").grid(row=1, column=0)
         self.el_voice = ctk.CTkEntry(el, width=360, height=34, corner_radius=10, fg_color=CARD_HI, border_width=0)
         if cfg.get("elevenlabs_voice"):
@@ -921,6 +958,16 @@ class SettingsPage(ctk.CTkFrame):
                                  command=lambda v: on_change(next(k for k, n in choices.items() if n == v)))
         menu.set(choices.get(current, names[0]))
         menu.grid(row=row, column=1, sticky="w", padx=12, pady=4)
+
+    def _paste_into(self, entry):
+        try:
+            text = self.clipboard_get().strip()
+        except Exception:
+            text = ""
+        if text:
+            entry.delete(0, "end")
+            entry.insert(0, text)
+            self._toast("Вставлено")
 
     def _eleven_save(self):
         cfg = self.app.cfg
