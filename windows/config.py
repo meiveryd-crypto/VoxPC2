@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 APP_NAME = "VoxPC"
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 HTTP_PORT = 47800
 DISCOVERY_PORT = 47801
 
@@ -66,6 +66,8 @@ DEFAULTS = {
     "remote_enabled": False,
     "public_url": "",
     "remote_api": True,
+    "stt_engine": "local",
+    "whisper_model": "large-v3-turbo",
     "brain_enabled": False,
     "brain_fast_local": True,
     "brain_model": "haiku",

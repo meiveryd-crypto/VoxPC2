@@ -16,6 +16,8 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name VoxPC ^
   --collect-data customtkinter ^
   --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 ^
   --hidden-import pystray._win32 ^
+  --collect-all vosk --collect-all faster_whisper --collect-all ctranslate2 ^
+  --collect-all av --collect-all onnxruntime --collect-all tokenizers ^
   main.py
 
 python -m PyInstaller --noconfirm --onefile --console --name VoxPC-MCP --icon icon.ico voxpc_mcp.py

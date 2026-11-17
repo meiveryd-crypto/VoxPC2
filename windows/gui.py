@@ -72,11 +72,7 @@ class App(ctk.CTk):
                                settings_fn=lambda: {k: cfg.get(k) for k in
                                                     ("elevenlabs_key", "elevenlabs_voice", "elevenlabs_model")})
         self.observer = observer_mod.Observer(lambda kind, snap: self.events.put(("observer", (kind, snap))))
-        self.voice = VoiceListener(
-            on_text=lambda t, manual: self.events.put(("voice_text", t)),
-            on_state=lambda s, msg="": self.events.put(("voice_state", (s, msg))),
-            wake_word_fn=lambda: cfg.get("wake_word"),
-        )
+        self.voice = self._make_voice()
         self.brain = brain.ClaudeBrain(cfg)
         self.server = ApiServer(cfg, self.processor,
                                 on_event=lambda src, text, res: self.events.put(("result", (src, text, res))),
@@ -335,6 +331,31 @@ class App(ctk.CTk):
         else:
             self.voice.stop_continuous()
             self.home.set_voice_state("idle", "")
+
+    def _make_voice(self):
+        cfg = self.cfg
+        kw = dict(on_text=lambda t, manual: self.events.put(("voice_text", t)),
+                  on_state=lambda s, msg="": self.events.put(("voice_state", (s, msg))),
+                  wake_word_fn=lambda: cfg.get("wake_word"))
+        if cfg.get("stt_engine") == "local":
+            try:
+                import local_stt
+                return local_stt.LocalVoice(config=cfg, **kw)
+            except Exception as e:
+                self.events.put(("voice_state", ("error", f"Vosk/Whisper недоступны ({e}), включён Google")))
+        return VoiceListener(**kw)
+
+    def switch_voice(self):
+        """Переключает движок распознавания без перезапуска VoxPC."""
+        was_on = bool(self.cfg.get("always_listen"))
+        try:
+            self.voice.stop_continuous()
+        except Exception:
+            pass
+        self.voice = self._make_voice()
+        self.home.mic.configure(command=self.voice.listen_once)
+        if was_on:
+            self.after(500, self.voice.start_continuous)
 
     def set_companion(self, on: bool):
         self.cfg.set("companion_enabled", on)
@@ -824,6 +845,19 @@ class SettingsPage(ctk.CTkFrame):
         self.wake.pack(side="left", padx=12)
         self._btn(row, "Сохранить", lambda: (cfg.set("wake_word", ", ".join(__import__("wake").words(self.wake.get())) or "компьютер"),
                                              self._toast("Ключевое слово сохранено")))
+        sgrid = ctk.CTkFrame(c, fg_color="transparent")
+        sgrid.pack(fill="x", padx=20, pady=(0, 4))
+        self._option(sgrid, 0, "Распознавание", {"local": "Vosk + Whisper (на ПК, лучший русский)",
+                                                  "google": "Google (онлайн)"},
+                     cfg.get("stt_engine") or "local",
+                     lambda v: (cfg.set("stt_engine", v), app.switch_voice()))
+        self._option(sgrid, 1, "Модель Whisper", {"large-v3-turbo": "Large v3 Turbo — лучший русский",
+                                                   "medium": "Medium — быстрее", "small": "Small — самый быстрый"},
+                     cfg.get("whisper_model") or "large-v3-turbo",
+                     lambda v: (cfg.set("whisper_model", v), app.switch_voice()))
+        ctk.CTkLabel(c, text="Vosk слушает только ключевое слово, Whisper распознаёт команду. Всё работает без "
+                             "интернета. Модели скачиваются один раз (~1,6 ГБ).", font=F(12), text_color=MUTED,
+                     justify="left").pack(anchor="w", padx=20, pady=(0, 6))
         self.tts_var = ctk.BooleanVar(value=bool(cfg.get("tts")))
         self._switch(c, "Озвучивать ответы голосом", self.tts_var, lambda: cfg.set("tts", self.tts_var.get()))
         self._btn(c, "Проверить голос", lambda: app.speaker.say("Привет! Я готов к работе."),
