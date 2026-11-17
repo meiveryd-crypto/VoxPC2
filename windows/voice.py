@@ -218,6 +218,8 @@ class Speaker:
         body = {"text": text, "model_id": model,
                 "voice_settings": {"stability": 0.38, "similarity_boost": 0.8, "style": 0.45,
                                    "use_speaker_boost": True}}
+        if "v2_5" in model or "v3" in model:
+            body["language_code"] = "ru"   # принудительно русский: правильное произношение и ударения
         req = urllib.request.Request(
             f"https://api.elevenlabs.io/v1/text-to-speech/{vid}?output_format=mp3_44100_128",
             data=_json.dumps(body).encode("utf-8"), method="POST",

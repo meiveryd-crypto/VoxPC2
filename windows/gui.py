@@ -741,6 +741,13 @@ class SettingsPage(ctk.CTkFrame):
         if cfg.get("elevenlabs_voice"):
             self.el_voice.insert(0, cfg.get("elevenlabs_voice"))
         self.el_voice.grid(row=1, column=1, padx=10, pady=3, sticky="w")
+        mgrid = ctk.CTkFrame(c, fg_color="transparent")
+        mgrid.pack(fill="x", padx=20, pady=(2, 0))
+        self._option(mgrid, 0, "Модель", {"eleven_multilingual_v2": "Multilingual v2 — лучший русский",
+                                           "eleven_v3": "Eleven v3 — самая эмоциональная",
+                                           "eleven_flash_v2_5": "Flash v2.5 — самая быстрая"},
+                     cfg.get("elevenlabs_model") or "eleven_multilingual_v2",
+                     lambda v: cfg.set("elevenlabs_model", v))
         row = ctk.CTkFrame(c, fg_color="transparent")
         row.pack(fill="x", padx=20, pady=(4, 4))
         self._btn(row, "Сохранить и проверить", self._eleven_save, accent=True)
@@ -923,7 +930,7 @@ class SettingsPage(ctk.CTkFrame):
 
         def work():
             try:
-                self.app.speaker.eleven_synth("Мрр. Проверка голоса.")
+                self.app.speaker.eleven_synth("Мрр. Проверка голоса, всё отлично слышно.")
                 ok, msg = True, "✓ Голос работает. Выбрана озвучка ElevenLabs."
             except Exception as e:
                 ok, msg = False, str(e)
@@ -932,7 +939,8 @@ class SettingsPage(ctk.CTkFrame):
                 self.el_status.configure(text=msg, text_color=OK if ok else DANGER)
                 if ok:
                     cfg.set("tts_engine", "elevenlabs")
-                    self.app.speaker.say("Мрр. Ну как тебе мой новый голос?", force=True)
+                    self.app.speaker.say("Мрр. Ну что, как тебе мой новый голос? Только не говори, что "
+                                         "скучала по старому.", force=True)
             self.after(0, show)
 
         threading.Thread(target=work, daemon=True).start()
