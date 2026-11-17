@@ -85,6 +85,7 @@ fun HomeScreen(
     onAction: (action: String, label: String, app: String?) -> Unit,
     onSettings: () -> Unit,
     onClearLog: () -> Unit,
+    onScreen: () -> Unit = {},
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     var confirm by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -121,6 +122,24 @@ fun HomeScreen(
             }
 
             item { PowerCard(state, onWake) { action, label -> confirm = action to label } }
+            if (state.online && state.authorized) {
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardC)
+                            .clickable(onClick = onScreen).padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Rounded.DesktopWindows, null, tint = Cyan)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Экран ПК", color = TextC, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text(if (state.remote) "Смотреть через интернет" else "Смотреть, что происходит на компьютере",
+                                color = Muted, fontSize = 13.sp)
+                        }
+                        Text("Открыть", color = Accent, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
             item { MicCard(state, onMic) }
 
             item {
@@ -220,6 +239,7 @@ private fun StatusChip(state: UiState) {
     val (text, color) = when {
         !state.configured -> "Нет ПК" to Muted
         !state.checked -> "Проверка…" to Muted
+        state.online && state.remote -> "В сети · интернет" to Ok
         state.online -> "В сети" to Ok
         state.waking -> "Включается…" to Warn
         else -> "Выключен" to Danger

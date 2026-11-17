@@ -22,6 +22,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.voxpc.remote.ui.HomeScreen
+import com.voxpc.remote.ui.ScreenView
 import com.voxpc.remote.ui.SettingsScreen
 import com.voxpc.remote.ui.VoxTheme
 
@@ -93,6 +94,7 @@ private fun AppRoot(vm: MainViewModel, shortcut: String?, onShortcutHandled: () 
     BackHandler(enabled = screen != "home") { screen = "home" }
 
     when (screen) {
+        "screen" -> ScreenView(vm.client, state.remote, onBack = { screen = "home" })
         "settings" -> SettingsScreen(
             state = state,
             prefs = vm.prefs,
@@ -100,6 +102,7 @@ private fun AppRoot(vm: MainViewModel, shortcut: String?, onShortcutHandled: () 
             onDiscover = vm::discover,
             onPick = vm::applyFound,
             onSave = vm::save,
+            onSaveRemote = vm::saveRemote,
         )
         else -> HomeScreen(
             state = state,
@@ -109,6 +112,7 @@ private fun AppRoot(vm: MainViewModel, shortcut: String?, onShortcutHandled: () 
             onAction = { action, label, app -> vm.action(action, label, app) },
             onSettings = { screen = "settings" },
             onClearLog = vm::clearLog,
+            onScreen = { screen = "screen" },
         )
     }
 }

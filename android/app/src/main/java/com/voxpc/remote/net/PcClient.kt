@@ -8,21 +8,31 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class PingResult(val online: Boolean, val authorized: Boolean, val name: String)
+data class PingResult(val online: Boolean, val authorized: Boolean, val name: String, val remote: Boolean = false)
 data class PcApp(val name: String, val icon: String)
 data class CommandResult(val ok: Boolean, val message: String)
 
-/** HTTP-клиент к программе VoxPC на компьютере. */
+/** HTTP-клиент к VoxPC: дома — напрямую по Wi-Fi, вне дома — через туннель VoxPC. */
 class PcClient(private val prefs: Prefs) {
 
-    private fun request(method: String, path: String, body: JSONObject? = null, timeout: Int = 5000): Pair<Int, String> {
-        val conn = URL("http://${prefs.host}:${prefs.port}$path").openConnection() as HttpURLConnection
+    @Volatile
+    var remote = false
+        private set
+    private var lastRelayCheck = 0L
+
+    private fun base(): String =
+        if (remote && prefs.remoteUrl.isNotBlank()) prefs.remoteUrl.trimEnd('/')
+        else "http://${prefs.host}:${prefs.port}"
+
+    private fun request(method: String, path: String, body: JSONObject? = null, timeout: Int = 5000,
+                        baseUrl: String = base()): Pair<Int, ByteArray> {
+        val conn = URL(baseUrl + path).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = method
-            conn.connectTimeout = timeout
-            conn.readTimeout = timeout
+            val https = baseUrl.startsWith("https")
+            conn.connectTimeout = if (https) maxOf(timeout, 6000) else timeout
+            conn.readTimeout = if (https) maxOf(timeout, 8000) else timeout
             conn.setRequestProperty("X-Token", prefs.token)
-            conn.setRequestProperty("Accept", "application/json")
             if (body != null) {
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -30,35 +40,80 @@ class PcClient(private val prefs: Prefs) {
             }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-            return code to text
+            val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
+            return code to bytes
         } finally {
             conn.disconnect()
         }
     }
 
+    private fun pingAt(baseUrl: String, timeout: Int): PingResult? = try {
+        val (code, bytes) = request("GET", "/api/ping", timeout = timeout, baseUrl = baseUrl)
+        val j = JSONObject(String(bytes, Charsets.UTF_8))
+        PingResult(code == 200, j.optBoolean("auth"), j.optString("name"))
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Проверяет связь: сначала домашняя сеть, затем интернет-адрес ПК. */
     suspend fun ping(): PingResult = withContext(Dispatchers.IO) {
-        if (prefs.host.isBlank()) return@withContext PingResult(false, false, "")
-        try {
-            val (code, text) = request("GET", "/api/ping", timeout = 2000)
-            val j = JSONObject(text)
-            PingResult(code == 200, j.optBoolean("auth"), j.optString("name"))
-        } catch (e: Exception) {
-            PingResult(false, false, "")
+        if (prefs.host.isNotBlank()) {
+            val home = pingAt("http://${prefs.host}:${prefs.port}", 1500)
+            if (home != null) {
+                remote = false
+                return@withContext home
+            }
         }
+        if (prefs.remoteId.isBlank()) {
+            remote = false
+            return@withContext PingResult(false, false, "")
+        }
+        if (prefs.remoteUrl.isNotBlank()) {
+            val r = pingAt(prefs.remoteUrl.trimEnd('/'), 6000)
+            if (r != null) {
+                remote = true
+                return@withContext r.copy(remote = true)
+            }
+        }
+        // адрес туннеля мог смениться после перезагрузки ПК — узнаём новый
+        val now = System.currentTimeMillis()
+        if (now - lastRelayCheck > 30_000) {
+            lastRelayCheck = now
+            val fresh = Relay.fetchUrl(prefs.remoteId)
+            if (fresh != null && fresh != prefs.remoteUrl) {
+                prefs.remoteUrl = fresh
+                val r = pingAt(fresh, 6000)
+                if (r != null) {
+                    remote = true
+                    return@withContext r.copy(remote = true)
+                }
+            }
+        }
+        remote = false
+        PingResult(false, false, "")
     }
 
     suspend fun apps(): List<PcApp> = withContext(Dispatchers.IO) {
         try {
-            val (code, text) = request("GET", "/api/apps")
+            val (code, bytes) = request("GET", "/api/apps")
             if (code != 200) return@withContext emptyList()
-            val arr = JSONArray(text)
+            val arr = JSONArray(String(bytes, Charsets.UTF_8))
             List(arr.length()) { i ->
                 val o = arr.getJSONObject(i)
                 PcApp(o.optString("name"), o.optString("icon", "🧩"))
             }
         } catch (e: Exception) {
             emptyList()
+        }
+    }
+
+    /** Снимок экрана ПК в JPEG. */
+    suspend fun screen(maxSide: Int, quality: Int): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            val (code, bytes) = request("GET", "/api/screen?max=$maxSide&q=$quality", timeout = 8000)
+            if (code == 200 && bytes.size > 100) bytes else null
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -71,15 +126,17 @@ class PcClient(private val prefs: Prefs) {
         return post("/api/action", body)
     }
 
-    private suspend fun post(path: String, body: JSONObject, timeout: Int = 8000): CommandResult = withContext(Dispatchers.IO) {
-        if (prefs.host.isBlank()) return@withContext CommandResult(false, "Сначала подключите ПК в настройках")
-        try {
-            val (code, text) = request("POST", path, body, timeout)
-            if (code == 401) return@withContext CommandResult(false, "Неверный код доступа")
-            val j = JSONObject(text)
-            CommandResult(j.optBoolean("ok"), j.optString("message"))
-        } catch (e: Exception) {
-            CommandResult(false, "ПК не отвечает. Он включён и VoxPC запущен?")
+    private suspend fun post(path: String, body: JSONObject, timeout: Int = 8000): CommandResult =
+        withContext(Dispatchers.IO) {
+            if (prefs.host.isBlank() && prefs.remoteUrl.isBlank())
+                return@withContext CommandResult(false, "Сначала подключите ПК в настройках")
+            try {
+                val (code, bytes) = request("POST", path, body, timeout)
+                if (code == 401) return@withContext CommandResult(false, "Неверный код доступа")
+                val j = JSONObject(String(bytes, Charsets.UTF_8))
+                CommandResult(j.optBoolean("ok"), j.optString("message"))
+            } catch (e: Exception) {
+                CommandResult(false, "ПК не отвечает. Он включён и VoxPC запущен?")
+            }
         }
-    }
 }

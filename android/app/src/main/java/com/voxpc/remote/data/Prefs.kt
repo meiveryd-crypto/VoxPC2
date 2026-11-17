@@ -31,6 +31,40 @@ class Prefs(context: Context) {
         get() = sp.getInt("wol_port", 9)
         set(v) = sp.edit().putInt("wol_port", v).apply()
 
+    /** Секретный канал, через который ПК сообщает адрес туннеля (приходит при «Найти ПК»). */
+    var remoteId: String
+        get() = sp.getString("remote_id", "") ?: ""
+        set(v) = sp.edit().putString("remote_id", v.trim()).apply()
+
+    var remoteUrl: String
+        get() = sp.getString("remote_url", "") ?: ""
+        set(v) = sp.edit().putString("remote_url", v.trim()).apply()
+
+    /** none | keenetic | forward */
+    var routerType: String
+        get() = sp.getString("router_type", "none") ?: "none"
+        set(v) = sp.edit().putString("router_type", v).apply()
+
+    var routerUrl: String
+        get() = sp.getString("router_url", "") ?: ""
+        set(v) = sp.edit().putString("router_url", v.trim()).apply()
+
+    var routerLogin: String
+        get() = sp.getString("router_login", "") ?: ""
+        set(v) = sp.edit().putString("router_login", v.trim()).apply()
+
+    var routerPassword: String
+        get() = sp.getString("router_password", "") ?: ""
+        set(v) = sp.edit().putString("router_password", v).apply()
+
+    var wanHost: String
+        get() = sp.getString("wan_host", "") ?: ""
+        set(v) = sp.edit().putString("wan_host", v.trim()).apply()
+
+    var wanPort: Int
+        get() = sp.getInt("wan_port", 9)
+        set(v) = sp.edit().putInt("wan_port", v).apply()
+
     var pcName: String
         get() = sp.getString("pc_name", "") ?: ""
         set(v) = sp.edit().putString("pc_name", v).apply()

@@ -10,9 +10,13 @@ import hmac
 import json
 import socket
 import threading
+import time
+from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import actions
 import netinfo
+import relay
 from mcp_server import McpHandler
 from config import DISCOVERY_PORT, VERSION
 
@@ -28,7 +32,20 @@ class ApiServer:
         self.on_show = on_show or (lambda: None)
         self.mcp = McpHandler(config, processor, self.on_event)
         self.httpd = None
+        self._fails = {}          # ip -> [время неудачных попыток]
+        self._fails_lock = threading.Lock()
         self._stop = threading.Event()
+
+    def blocked(self, ip):
+        now = time.time()
+        with self._fails_lock:
+            fails = [t for t in self._fails.get(ip, []) if now - t < 300]
+            self._fails[ip] = fails
+            return len(fails) >= 10
+
+    def failed(self, ip):
+        with self._fails_lock:
+            self._fails.setdefault(ip, []).append(time.time())
 
     def _authorized(self, token: str) -> bool:
         return hmac.compare_digest((token or "").strip().upper(), str(self.config.get("token")).upper())
@@ -50,8 +67,17 @@ class ApiServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _client_ip(self):
+                return self.headers.get("Cf-Connecting-Ip") or self.client_address[0]
+
             def _is_auth(self):
-                return api._authorized(self.headers.get("X-Token", ""))
+                ip = self._client_ip()
+                if api.blocked(ip):
+                    return False
+                ok = api._authorized(self.headers.get("X-Token", ""))
+                if not ok and self.headers.get("X-Token"):
+                    api.failed(ip)
+                return ok
 
             def _path(self):
                 return self.path.split("?", 1)[0].rstrip("/")
@@ -71,7 +97,7 @@ class ApiServer:
                         self._send(404, {"error": "not found"})
                         return False
                     return True
-                if self._via_tunnel():
+                if self._via_tunnel() and not (path.startswith("/api/") and api.config.get("remote_api")):
                     self._send(403, {"ok": False, "message": "Forbidden"})
                     return False
                 return True
@@ -96,6 +122,21 @@ class ApiServer:
                                             "auth": self._is_auth()})
                 if not self._is_auth():
                     return self._send(401, {"ok": False, "message": "Неверный код доступа"})
+                if path == "/api/screen":
+                    q = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                    side = max(320, min(2560, int((q.get("max") or ["1280"])[0])))
+                    quality = max(20, min(90, int((q.get("q") or ["60"])[0])))
+                    try:
+                        data = actions.screenshot_jpeg(side, quality)
+                    except Exception as e:
+                        return self._send(500, {"ok": False, "message": f"Не удалось снять экран: {e}"})
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if path == "/api/apps":
                     return self._send(200, [{"name": a.get("name", ""), "icon": a.get("icon", "🧩")}
                                             for a in api.config.apps])
@@ -188,7 +229,8 @@ class ApiServer:
                 break
             if data.strip() == DISCOVER_MAGIC:
                 reply = {"name": netinfo.hostname(), "port": int(self.config.get("port")),
-                         "mac": netinfo.mac_address(), "version": VERSION}
+                         "mac": netinfo.mac_address(), "version": VERSION,
+                         "remote_id": relay.remote_id(self.config)}
                 try:
                     sock.sendto(json.dumps(reply, ensure_ascii=False).encode("utf-8"), addr)
                 except OSError:

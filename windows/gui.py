@@ -14,6 +14,7 @@ import companion as companion_mod
 import netinfo
 import observer as observer_mod
 import persona
+import relay
 import system
 import tunnel
 from commands import CommandProcessor
@@ -81,6 +82,7 @@ class App(ctk.CTk):
                                 on_event=lambda src, text, res: self.events.put(("result", (src, text, res))),
                                 command_handler=self.handle_text,
                                 on_show=lambda: self.events.put(("show", None)))
+        self.relay = relay.Relay(cfg)
         self.tunnel = tunnel.Tunnel(lambda: cfg.get("port"),
                                     on_status=lambda st, url="": self.events.put(("tunnel", (st, url))))
         self.tray = system.Tray(on_show=lambda: self.events.put(("show", None)),
@@ -268,6 +270,8 @@ class App(ctk.CTk):
                         self.home.set_voice_state("idle", "")
                 elif kind == "tunnel":
                     self.pages["settings"].set_tunnel_state(*payload)
+                    if payload[0] == "running":
+                        self.relay.publish(payload[1])
                 elif kind == "show":
                     self.deiconify()
                     self.lift()
@@ -890,6 +894,9 @@ class SettingsPage(ctk.CTkFrame):
             self.public_entry.insert(0, cfg.get("public_url"))
         self.public_entry.pack(side="left", padx=10)
         self._btn(row, "Сохранить", self._save_public_url)
+        self.remote_api_var = ctk.BooleanVar(value=bool(cfg.get("remote_api")))
+        self._switch(c, "Телефон может управлять ПК и смотреть экран вне дома (через этот туннель, по коду доступа)",
+                     self.remote_api_var, lambda: cfg.set("remote_api", self.remote_api_var.get()))
         ctk.CTkLabel(c, text="⚠ Любой, у кого есть этот адрес, сможет управлять ПК. Никому его не показывайте.",
                      font=F(12), text_color=WARN).pack(anchor="w", padx=20, pady=(4, 18))
         self._refresh_url()

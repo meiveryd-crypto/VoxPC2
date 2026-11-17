@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.voxpc.remote.data.Prefs
 import com.voxpc.remote.net.Discovery
 import com.voxpc.remote.net.FoundPc
+import com.voxpc.remote.net.Keenetic
 import com.voxpc.remote.net.PcApp
 import com.voxpc.remote.net.PcClient
 import com.voxpc.remote.net.WakeOnLan
@@ -27,6 +28,7 @@ data class UiState(
     val online: Boolean = false,
     val checked: Boolean = false,
     val authorized: Boolean = true,
+    val remote: Boolean = false,
     val pcName: String = "",
     val apps: List<PcApp> = emptyList(),
     val log: List<LogEntry> = emptyList(),
@@ -44,7 +46,7 @@ private val WAKE_PHRASES = listOf(
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val prefs = Prefs(app)
-    private val client = PcClient(prefs)
+    val client = PcClient(prefs)
     private val _state = MutableStateFlow(UiState(configured = prefs.host.isNotBlank(), pcName = prefs.pcName))
     val state = _state.asStateFlow()
     private var pollJob: Job? = null
@@ -70,7 +72,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (p.online && p.name.isNotBlank()) prefs.pcName = p.name
         _state.update {
             it.copy(
-                online = p.online, checked = true, authorized = !p.online || p.authorized,
+                online = p.online, checked = true, authorized = !p.online || p.authorized, remote = p.remote,
                 pcName = p.name.ifBlank { it.pcName }, configured = prefs.host.isNotBlank(),
             )
         }
@@ -115,11 +117,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun wake() {
         viewModelScope.launch {
             _state.update { it.copy(waking = true) }
-            val r = WakeOnLan.send(prefs.mac, prefs.broadcast, prefs.wolPort, prefs.host)
-            if (r.isSuccess) {
-                addLog("Сигнал включения отправлен. ПК загрузится через 15–60 секунд", true, false)
-            } else {
-                addLog("Не удалось отправить сигнал: ${r.exceptionOrNull()?.message}", false, false)
+            // 1) в домашней сети — обычный «магический пакет»
+            val local = WakeOnLan.send(prefs.mac, prefs.broadcast, prefs.wolPort, prefs.host)
+            // 2) вне дома — через роутер
+            when (prefs.routerType) {
+                "keenetic" -> {
+                    val r = Keenetic.wake(prefs.routerUrl, prefs.routerLogin, prefs.routerPassword, prefs.mac)
+                    if (r.isSuccess) addLog("Роутер Keenetic разбудил ПК. Он загрузится через 15–60 секунд", true, false)
+                    else addLog("Keenetic: ${r.exceptionOrNull()?.message}", false, false)
+                }
+                "forward" -> if (prefs.wanHost.isNotBlank()) {
+                    val r = WakeOnLan.send(prefs.mac, prefs.wanHost, prefs.wanPort, prefs.wanHost)
+                    if (r.isSuccess) addLog("Сигнал включения отправлен на роутер (${prefs.wanHost})", true, false)
+                    else addLog("Не удалось отправить на роутер: ${r.exceptionOrNull()?.message}", false, false)
+                }
+            }
+            if (prefs.routerType == "none" || local.isFailure) {
+                if (local.isSuccess) {
+                    addLog("Сигнал включения отправлен. ПК загрузится через 15–60 секунд", true, false)
+                } else {
+                    addLog("Не удалось отправить сигнал: ${local.exceptionOrNull()?.message}", false, false)
+                }
             }
             delay(4000)
             _state.update { it.copy(waking = false) }
@@ -138,6 +156,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.host = pc.ip
         prefs.port = pc.port
         if (pc.mac.isNotBlank()) prefs.mac = pc.mac
+        if (pc.remoteId.isNotBlank()) prefs.remoteId = pc.remoteId
         prefs.pcName = pc.name
         _state.update { it.copy(configured = true, pcName = pc.name, found = emptyList(), apps = emptyList()) }
         viewModelScope.launch { refresh() }
@@ -152,6 +171,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.wolPort = wolPort.toIntOrNull() ?: 9
         _state.update { it.copy(configured = host.isNotBlank(), apps = emptyList()) }
         viewModelScope.launch { refresh() }
+    }
+
+    fun saveRemote(type: String, url: String, login: String, password: String, wanHost: String, wanPort: String) {
+        prefs.routerType = type
+        prefs.routerUrl = url
+        prefs.routerLogin = login
+        prefs.routerPassword = password
+        prefs.wanHost = wanHost
+        prefs.wanPort = wanPort.toIntOrNull() ?: 9
     }
 
     fun clearLog() = _state.update { it.copy(log = emptyList()) }

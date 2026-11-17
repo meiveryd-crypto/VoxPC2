@@ -42,6 +42,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voxpc.remote.UiState
@@ -56,7 +58,14 @@ fun SettingsScreen(
     onDiscover: () -> Unit,
     onPick: (FoundPc) -> Unit,
     onSave: (host: String, port: String, token: String, mac: String, broadcast: String, wolPort: String) -> Unit,
+    onSaveRemote: (type: String, url: String, login: String, password: String, wanHost: String, wanPort: String) -> Unit,
 ) {
+    var routerType by remember { mutableStateOf(prefs.routerType) }
+    var routerUrl by remember { mutableStateOf(prefs.routerUrl) }
+    var routerLogin by remember { mutableStateOf(prefs.routerLogin) }
+    var routerPassword by remember { mutableStateOf(prefs.routerPassword) }
+    var wanHost by remember { mutableStateOf(prefs.wanHost) }
+    var wanPort by remember { mutableStateOf(prefs.wanPort.toString()) }
     var host by remember { mutableStateOf(prefs.host) }
     var port by remember { mutableStateOf(prefs.port.toString()) }
     var token by remember { mutableStateOf(prefs.token) }
@@ -149,9 +158,55 @@ fun SettingsScreen(
             )
         }
 
+        // --- вне дома ---
+        Card {
+            Text("Вне дома", color = TextC, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Text(
+                if (prefs.remoteId.isNotBlank())
+                    "Управление и экран: работают через интернет, если на ПК в VoxPC включён «Доступ через интернет» " +
+                        "(Настройки → Коннектор Claude). Адрес подхватывается сам."
+                else "Нажмите «Найти ПК», находясь дома, — телефон получит секретный ключ для доступа вне дома.",
+                color = if (prefs.remoteId.isNotBlank()) Muted else Warn, fontSize = 13.sp,
+            )
+            Text("Включение ПК вне дома — через роутер:", color = TextC, fontSize = 14.sp,
+                modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("none" to "Нет", "keenetic" to "Keenetic", "forward" to "Проброс порта").forEach { (k, label) ->
+                    Text(
+                        label, color = if (routerType == k) Color.White else Muted, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp))
+                            .background(if (routerType == k) Accent else CardHi)
+                            .clickable { routerType = k }.padding(horizontal = 14.dp, vertical = 9.dp),
+                    )
+                }
+            }
+            when (routerType) {
+                "keenetic" -> {
+                    Text("Адрес KeenDNS вашего роутера и учётная запись с доступом к веб-интерфейсу. " +
+                        "MAC-адрес ПК берётся из блока выше.", color = Muted, fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 8.dp))
+                    Field("Адрес роутера (например, myhome.keenetic.link)", routerUrl, { routerUrl = it }, KeyboardType.Uri)
+                    Field("Логин роутера", routerLogin, { routerLogin = it }, KeyboardType.Ascii)
+                    Field("Пароль роутера", routerPassword, { routerPassword = it }, KeyboardType.Password, secret = true)
+                }
+                "forward" -> {
+                    Text("На роутере (ASUS, TP-Link и др.): закрепите за ПК IP-адрес, пробросьте UDP-порт с внешней " +
+                        "стороны на этот IP и привяжите IP к MAC (IP & MAC Binding / статический ARP). " +
+                        "Ниже — внешний IP или DDNS-домен роутера.", color = Muted, fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 8.dp))
+                    Field("Внешний адрес роутера (IP или домен)", wanHost, { wanHost = it }, KeyboardType.Uri)
+                    Field("Внешний UDP-порт", wanPort, { wanPort = it.filter(Char::isDigit) }, KeyboardType.Number)
+                }
+            }
+        }
+
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Accent)
-                .clickable { onSave(host, port, token, mac, broadcast, wolPort); onBack() }
+                .clickable {
+                    onSave(host, port, token, mac, broadcast, wolPort)
+                    onSaveRemote(routerType, routerUrl, routerLogin, routerPassword, wanHost, wanPort)
+                    onBack()
+                }
                 .padding(vertical = 16.dp),
             horizontalArrangement = Arrangement.Center,
         ) { Text("Сохранить", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
@@ -167,8 +222,10 @@ private fun Card(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Field(label: String, value: String, onChange: (String) -> Unit, type: KeyboardType, caps: Boolean = false) {
+private fun Field(label: String, value: String, onChange: (String) -> Unit, type: KeyboardType, caps: Boolean = false,
+                  secret: Boolean = false) {
     OutlinedTextField(
+        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         value = value,
         onValueChange = onChange,
         label = { Text(label) },

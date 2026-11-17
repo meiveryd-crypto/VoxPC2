@@ -99,12 +99,12 @@ def open_windows():
             for d in data]
 
 
-def screenshot_jpeg(max_side: int = 1600) -> bytes:
+def screenshot_jpeg(max_side: int = 1600, quality: int = 70) -> bytes:
     from PIL import ImageGrab
     img = ImageGrab.grab()
     img.thumbnail((max_side, max_side))
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=70)
+    img.convert("RGB").save(buf, "JPEG", quality=quality)
     return buf.getvalue()
 
 

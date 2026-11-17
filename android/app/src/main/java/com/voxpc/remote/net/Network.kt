@@ -46,7 +46,7 @@ object WakeOnLan {
         }
 }
 
-data class FoundPc(val ip: String, val name: String, val port: Int, val mac: String)
+data class FoundPc(val ip: String, val name: String, val port: Int, val mac: String, val remoteId: String = "")
 
 /** Поиск ПК с запущенным VoxPC в локальной сети. */
 object Discovery {
@@ -69,7 +69,8 @@ object Discovery {
                         val ip = p.address?.hostAddress ?: continue
                         val j = JSONObject(String(p.data, 0, p.length, Charsets.UTF_8))
                         if (found.none { it.ip == ip }) {
-                            found += FoundPc(ip, j.optString("name", ip), j.optInt("port", 47800), j.optString("mac"))
+                            found += FoundPc(ip, j.optString("name", ip), j.optInt("port", 47800), j.optString("mac"),
+                                j.optString("remote_id"))
                         }
                     } catch (e: SocketTimeoutException) {
                     } catch (e: Exception) {
