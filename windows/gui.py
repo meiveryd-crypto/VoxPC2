@@ -940,7 +940,7 @@ class SettingsPage(ctk.CTkFrame):
                 if ok:
                     cfg.set("tts_engine", "elevenlabs")
                     self.app.speaker.say("Мрр. Ну что, как тебе мой новый голос? Только не говори, что "
-                                         "скучала по старому.", force=True)
+                                         "скучал по старому.", force=True)
             self.after(0, show)
 
         threading.Thread(target=work, daemon=True).start()
