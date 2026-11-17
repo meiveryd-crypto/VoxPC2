@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 APP_NAME = "VoxPC"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 HTTP_PORT = 47800
 DISCOVERY_PORT = 47801
 
@@ -68,6 +68,16 @@ DEFAULTS = {
     "brain_enabled": False,
     "brain_fast_local": True,
     "brain_model": "haiku",
+    "tts_engine": "edge",
+    "companion_enabled": True,
+    "companion_scale": 1.0,
+    "companion_pos": None,
+    "companion_roam": True,
+    "companion_roam_minutes": 3,
+    "companion_comments": "rare",
+    "companion_screens": True,
+    "companion_quiet": True,
+    "companion_hide_fullscreen": True,
     "apps": DEFAULT_APPS,
 }
 

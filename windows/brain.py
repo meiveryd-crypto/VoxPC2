@@ -11,6 +11,7 @@ from pathlib import Path
 
 from actions import CREATE_NO_WINDOW
 from config import data_dir
+import persona
 
 MODELS = {"haiku": "Быстрый (Haiku)", "sonnet": "Умный (Sonnet)", "opus": "Максимум (Opus)"}
 SESSION_TTL = 300  # сек: в течение 5 минут Claude помнит контекст разговора
@@ -89,7 +90,7 @@ class ClaudeBrain:
                     "--mcp-config", str(mcp), "--strict-mcp-config",
                     "--allowedTools", "mcp__voxpc",
                     "--disallowedTools", DENY_TOOLS,
-                    "--append-system-prompt", SYSTEM_PROMPT]
+                    "--append-system-prompt", self._system_prompt()]
             if self.session_id and time.time() - self.last_used < SESSION_TTL:
                 args += ["--resume", self.session_id]
             env = dict(os.environ, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
@@ -102,6 +103,55 @@ class ClaudeBrain:
             except OSError as e:
                 return {"ok": False, "message": f"Не удалось запустить Claude Code: {e}"}
             return self._parse(proc)
+
+    def _system_prompt(self):
+        if self.config.get("companion_enabled"):
+            return persona.PERSONA + " " + SYSTEM_PROMPT.split(". ", 1)[1]
+        return SYSTEM_PROMPT
+
+    # ---------- самостоятельные реплики компаньона ----------
+    def comment(self, context: str, screenshot: bytes = None, timeout: int = 90):
+        """Короткая реплика Глитч о происходящем. None — решила промолчать или ошибка."""
+        exe = find_claude()
+        if not exe or not self._lock.acquire(blocking=False):
+            return None
+        try:
+            workdir = data_dir() / "brain" / "watch"
+            workdir.mkdir(parents=True, exist_ok=True)
+            empty = workdir / "no-mcp.json"
+            empty.write_text('{"mcpServers": {}}', encoding="utf-8")
+            text = context
+            shot = workdir / "screen.jpg"
+            if screenshot:
+                shot.write_bytes(screenshot)
+                text += ("\nСнимок экрана пользователя прямо сейчас: файл screen.jpg в текущей папке. "
+                         "Посмотри его инструментом Read, прежде чем отвечать.")
+            elif shot.exists():
+                shot.unlink()
+            args = [exe, "-p", "--output-format", "json", "--model", "haiku",
+                    "--mcp-config", str(empty), "--strict-mcp-config",
+                    "--allowedTools", "Read", "--disallowedTools", DENY_TOOLS.replace("Read,", ""),
+                    "--append-system-prompt", persona.PERSONA + " " + persona.COMMENT_RULES]
+            try:
+                proc = subprocess.run(args, input=text, capture_output=True, text=True, encoding="utf-8",
+                                      errors="replace", timeout=timeout, cwd=str(workdir),
+                                      creationflags=CREATE_NO_WINDOW)
+            except (subprocess.TimeoutExpired, OSError):
+                return None
+            for line in reversed((proc.stdout or "").strip().splitlines()):
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(data, dict) and not data.get("is_error"):
+                    msg = str(data.get("result") or "").strip().strip('"«»')
+                    if not msg or "SILENT" in msg.upper() or len(msg) > 300:
+                        return None
+                    return msg
+                return None
+            return None
+        finally:
+            self._lock.release()
 
     def _parse(self, proc) -> dict:
         out = (proc.stdout or "").strip()

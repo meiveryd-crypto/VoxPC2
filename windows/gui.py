@@ -8,7 +8,10 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 import brain
+import companion as companion_mod
 import netinfo
+import observer as observer_mod
+import persona
 import system
 import tunnel
 from commands import CommandProcessor
@@ -29,7 +32,7 @@ OK = "#2EE59D"
 DANGER = "#FF5C7A"
 WARN = "#FFC857"
 
-SOURCE_ICON = {"voice": "🎙", "text": "⌨", "phone": "📱", "system": "⚙", "claude": "🤖"}
+SOURCE_ICON = {"voice": "🎙", "text": "⌨", "phone": "📱", "system": "⚙", "claude": "🤖", "cat": "🐈‍⬛"}
 
 
 def F(size=14, weight="normal"):
@@ -59,7 +62,11 @@ class App(ctk.CTk):
         self._tray_hint_shown = False
 
         self.processor = CommandProcessor(cfg)
-        self.speaker = Speaker(lambda: cfg.get("tts"))
+        self.busy = False
+        self.companion = None
+        self.speaker = Speaker(lambda: cfg.get("tts"), engine_fn=lambda: cfg.get("tts_engine") or "edge",
+                               on_speaking=lambda v: self.events.put(("speaking", v)))
+        self.observer = observer_mod.Observer(lambda kind, snap: self.events.put(("observer", (kind, snap))))
         self.voice = VoiceListener(
             on_text=lambda t, manual: self.events.put(("voice_text", t)),
             on_state=lambda s, msg="": self.events.put(("voice_state", (s, msg))),
@@ -107,6 +114,8 @@ class App(ctk.CTk):
         self.after(100, self._poll)
         if cfg.get("always_listen"):
             self.after(800, lambda: self.set_always_listen(True))
+        if cfg.get("companion_enabled"):
+            self.after(1500, lambda: self.set_companion(True))
         if minimized:
             self.after(60, self.withdraw if self.tray.available else self.iconify)
 
@@ -195,11 +204,26 @@ class App(ctk.CTk):
                     self.run_command(payload, "voice")
                 elif kind == "voice_state":
                     self.home.set_voice_state(*payload)
+                    if self.companion:
+                        self.companion.set_listening(payload[0])
                 elif kind == "result":
                     source, text, res = payload
                     self.home.add_log(source, text, res)
                     if source in ("voice", "text"):
                         self.speaker.say(res.get("message", ""))
+                    if self.companion and source != "claude" and res.get("message"):
+                        self.companion.show_result(res["message"], res.get("ok", True))
+                elif kind == "speaking":
+                    if self.companion:
+                        self.companion.set_speaking(payload)
+                elif kind == "observer":
+                    if self.companion:
+                        self.companion.on_observer(*payload)
+                elif kind == "companion_say":
+                    if self.companion:
+                        self.companion.say(payload)
+                        self.companion.delivered()
+                        self.home.add_log("cat", persona.NAME, {"ok": True, "message": payload})
                 elif kind == "thinking":
                     if payload:
                         self.home.set_voice_state("processing", "Claude думает…")
@@ -223,6 +247,13 @@ class App(ctk.CTk):
         text = (text or "").strip()
         if not text:
             return {"ok": False, "message": "Пустая команда"}
+        self.busy = True
+        try:
+            return self._handle_text(text)
+        finally:
+            self.busy = False
+
+    def _handle_text(self, text):
         try:
             if not self.cfg.get("brain_enabled"):
                 return self.processor.execute(text)
@@ -263,6 +294,28 @@ class App(ctk.CTk):
             self.voice.stop_continuous()
             self.home.set_voice_state("idle", "")
 
+    def set_companion(self, on: bool):
+        self.cfg.set("companion_enabled", on)
+        if on and not self.companion:
+            try:
+                self.companion = companion_mod.Companion(self)
+                self.observer.start()
+            except Exception as e:
+                self.companion = None
+                self.home.add_log("system", "Компаньон не запустился", {"ok": False, "message": str(e)})
+        elif not on and self.companion:
+            self.observer.stop()
+            self.companion.destroy()
+            self.companion = None
+        if "settings" in getattr(self, "pages", {}):
+            self.pages["settings"].sync_companion()
+
+    def restart_companion(self):
+        if self.companion:
+            self.companion.destroy()
+            self.companion = None
+            self.set_companion(True)
+
     def on_close(self):
         if self.tray.available:
             self.withdraw()
@@ -275,6 +328,9 @@ class App(ctk.CTk):
 
     def quit_app(self):
         self.voice.stop_continuous()
+        self.observer.stop()
+        if self.companion:
+            self.companion.destroy()
         self.tunnel.stop()
         try:
             self.server.stop()
@@ -632,8 +688,41 @@ class SettingsPage(ctk.CTkFrame):
         self.model_menu.pack(side="left", padx=12)
         self._refresh_brain_status()
 
+        # --- компаньон ---
+        c = self._card(2, "🐈‍⬛  Глитч — компаньон на рабочем столе",
+                       "Чёрная кибер-кошка живёт поверх окон, отвечает голосом и сама комментирует, что вы делаете.")
+        tips = ("Гладьте её по голове кликом, тыкайте в бок, тащите мышкой. Двойной клик — сказать команду,\n"
+                "правый клик — меню. С включённым «Мозгом» она понимает, что происходит, и комментирует по сути.")
+        ctk.CTkLabel(c, text=tips, font=F(12), text_color=MUTED, justify="left").pack(anchor="w", padx=20)
+        self.cat_var = ctk.BooleanVar(value=bool(cfg.get("companion_enabled")))
+        self._switch(c, "Показывать Глитч поверх окон", self.cat_var, lambda: app.set_companion(self.cat_var.get()))
+        grid = ctk.CTkFrame(c, fg_color="transparent")
+        grid.pack(fill="x", padx=20, pady=(0, 6))
+        self._option(grid, 0, "Размер", {"0.75": "Маленькая", "1.0": "Средняя", "1.3": "Большая"},
+                     str(cfg.get("companion_scale") or 1.0),
+                     lambda v: (cfg.set("companion_scale", float(v)), app.restart_companion()))
+        self._option(grid, 1, "Комментарии", {"off": "Выключены", "rare": "Иногда", "chatty": "Разговорчивая"},
+                     cfg.get("companion_comments") or "rare", lambda v: cfg.set("companion_comments", v))
+        self._option(grid, 2, "Гулять по экрану", {"1": "раз в минуту", "3": "раз в 3 мин", "10": "раз в 10 мин",
+                                                   "30": "раз в 30 мин"},
+                     str(int(cfg.get("companion_roam_minutes") or 3)),
+                     lambda v: cfg.set("companion_roam_minutes", int(v)))
+        self._option(grid, 3, "Голос", {"edge": "Нейроголос Глитч", "sapi": "Голос Windows"},
+                     cfg.get("tts_engine") or "edge", lambda v: cfg.set("tts_engine", v))
+        for key, text in (("companion_roam", "Сама перемещается и садится на окна"),
+                          ("companion_screens", "Смотрит на экран (снимки экрана отправляются Claude для комментариев)"),
+                          ("companion_quiet", "Тихие часы 23:00–09:00"),
+                          ("companion_hide_fullscreen", "Прятаться, когда открыта полноэкранная игра или видео")):
+            var = ctk.BooleanVar(value=bool(cfg.get(key)))
+            self._switch(c, text, var, lambda k=key, v=var: cfg.set(k, v.get()))
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(4, 18))
+        self._btn(row, "Позвать домой", lambda: app.companion and app.companion.go_home())
+        self._btn(row, "Скажи что-нибудь", lambda: app.companion and app.companion.initiate("idle", force=True))
+        self._btn(row, "Проверить голос", lambda: app.speaker.say("Мрр. Привет, это Глитч!", force=True))
+
         # --- подключение ---
-        c = self._card(2, "📱  Подключение телефона",
+        c = self._card(3, "📱  Подключение телефона",
                        "Нажмите «Найти ПК» в приложении на телефоне или введите эти данные вручную.")
         grid = ctk.CTkFrame(c, fg_color="transparent")
         grid.pack(fill="x", padx=20, pady=(4, 18))
@@ -651,7 +740,7 @@ class SettingsPage(ctk.CTkFrame):
         threading.Thread(target=self._load_mac, daemon=True).start()
 
         # --- голос ---
-        c = self._card(3, "🎙  Голос", "Ключевое слово нужно в режиме постоянного прослушивания.")
+        c = self._card(4, "🎙  Голос", "Ключевое слово нужно в режиме постоянного прослушивания.")
         row = ctk.CTkFrame(c, fg_color="transparent")
         row.pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkLabel(row, text="Ключевое слово", font=F(14), text_color=TEXT).pack(side="left")
@@ -666,7 +755,7 @@ class SettingsPage(ctk.CTkFrame):
                   pack=dict(anchor="w", padx=20, pady=(4, 18)))
 
         # --- запуск ---
-        c = self._card(4, "🚀  Запуск", "Чтобы телефон мог управлять ПК, VoxPC должен работать в фоне.")
+        c = self._card(5, "🚀  Запуск", "Чтобы телефон мог управлять ПК, VoxPC должен работать в фоне.")
         self.auto_var = ctk.BooleanVar(value=system.autostart_enabled() if os.name == "nt" else False)
         self._switch(c, "Запускать вместе с Windows", self.auto_var, self._toggle_autostart)
         self.min_var = ctk.BooleanVar(value=bool(cfg.get("start_minimized")))
@@ -674,7 +763,7 @@ class SettingsPage(ctk.CTkFrame):
                      lambda: cfg.set("start_minimized", self.min_var.get()), last=True)
 
         # --- WoL ---
-        c = self._card(5, "⚡  Удалённое включение (Wake-on-LAN)", "")
+        c = self._card(6, "⚡  Удалённое включение (Wake-on-LAN)", "")
         steps = ("1. В BIOS/UEFI включите «Wake on LAN» / «Power On by PCI-E» (и отключите ErP/EuP).\n"
                  "2. Нажмите кнопку ниже — VoxPC сам настроит сетевую карту, отключит «Быстрый запуск»\n"
                  "    и откроет порты в брандмауэре (нужны права администратора).\n"
@@ -689,7 +778,7 @@ class SettingsPage(ctk.CTkFrame):
         self._btn(row, "Папка с настройками", system.open_data_dir)
 
         # --- коннектор Claude ---
-        c = self._card(6, "🤖  Коннектор Claude",
+        c = self._card(7, "🤖  Коннектор Claude",
                        "Claude управляет ПК прямо из чата и голосового режима — по вашей подписке, без API-ключа.")
         ctk.CTkLabel(c, text="На этом ПК — приложение Claude для Windows", font=F(15, "bold"),
                      text_color=TEXT).pack(anchor="w", padx=20, pady=(4, 0))
@@ -789,6 +878,19 @@ class SettingsPage(ctk.CTkFrame):
             system.run_wol_setup()
         except Exception as e:
             messagebox.showerror(APP_NAME, f"Не удалось запустить настройку: {e}")
+
+    # --- компаньон ---
+    def _option(self, parent, row, label, choices, current, on_change):
+        ctk.CTkLabel(parent, text=label, font=F(14), text_color=TEXT).grid(row=row, column=0, sticky="w", pady=4)
+        names = list(choices.values())
+        menu = ctk.CTkOptionMenu(parent, values=names, width=220, fg_color=CARD_HI, button_color=ACCENT,
+                                 button_hover_color=ACCENT_HI,
+                                 command=lambda v: on_change(next(k for k, n in choices.items() if n == v)))
+        menu.set(choices.get(current, names[0]))
+        menu.grid(row=row, column=1, sticky="w", padx=12, pady=4)
+
+    def sync_companion(self):
+        self.cat_var.set(bool(self.app.cfg.get("companion_enabled")))
 
     # --- мозг ---
     def _refresh_brain_status(self):

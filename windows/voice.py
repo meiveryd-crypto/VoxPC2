@@ -128,20 +128,42 @@ class VoiceListener:
             self.on_state("error", str(e))
 
 
-class Speaker:
-    """Озвучка ответов через голоса Windows (SAPI) в отдельном потоке."""
+EDGE_VOICE = "ru-RU-SvetlanaNeural"
 
-    def __init__(self, enabled_fn):
+
+def _play_mp3(path: str):
+    """Проигрывает mp3 средствами Windows (MCI) и ждёт окончания."""
+    import ctypes
+    winmm = ctypes.windll.winmm
+    alias = "voxpc_tts"
+    winmm.mciSendStringW(f'close {alias}', None, 0, None)
+    if winmm.mciSendStringW(f'open "{path}" type mpegvideo alias {alias}', None, 0, None) != 0:
+        raise OSError("MCI open failed")
+    winmm.mciSendStringW(f'play {alias} wait', None, 0, None)
+    winmm.mciSendStringW(f'close {alias}', None, 0, None)
+
+
+class Speaker:
+    """Озвучка ответов в отдельном потоке.
+
+    Голос «Глитч»: нейронный голос Microsoft (edge-tts) с повышенным тоном; без интернета
+    или без пакета edge-tts — голоса Windows (SAPI).
+    on_speaking(True/False) сообщает, когда идёт речь (для анимации рта).
+    """
+
+    def __init__(self, enabled_fn, engine_fn=lambda: "edge", on_speaking=None):
         self.enabled_fn = enabled_fn
+        self.engine_fn = engine_fn
+        self.on_speaking = on_speaking or (lambda v: None)
         self.q = queue.Queue()
+        self.speaking = False
         threading.Thread(target=self._run, daemon=True).start()
 
-    def say(self, text: str):
-        if text and self.enabled_fn():
+    def say(self, text: str, force: bool = False):
+        if text and (force or self.enabled_fn()):
             self.q.put(text)
 
-    def _run(self):
-        engine = None
+    def _sapi_engine(self):
         try:
             import pyttsx3
             engine = pyttsx3.init()
@@ -151,14 +173,51 @@ class Speaker:
                     engine.setProperty("voice", v.id)
                     break
             engine.setProperty("rate", 185)
+            return engine
         except Exception:
-            engine = None
+            return None
+
+    def _edge(self, text: str) -> bool:
+        try:
+            import asyncio
+            import os
+            import tempfile
+            import edge_tts
+        except ImportError:
+            return False
+        path = os.path.join(tempfile.gettempdir(), "voxpc_tts.mp3")
+        try:
+            async def synth():
+                await edge_tts.Communicate(text, EDGE_VOICE, rate="+6%", pitch="+28Hz").save(path)
+            asyncio.run(synth())
+            self._set(True)
+            _play_mp3(path)
+            return True
+        except Exception:
+            return False
+
+    def _set(self, value):
+        self.speaking = value
+        try:
+            self.on_speaking(value)
+        except Exception:
+            pass
+
+    def _run(self):
+        sapi = None
         while True:
             text = self.q.get()
-            if engine is None:
-                continue
             try:
-                engine.say(text)
-                engine.runAndWait()
-            except Exception:
-                pass
+                done = self.engine_fn() == "edge" and self._edge(text)
+                if not done:
+                    if sapi is None:
+                        sapi = self._sapi_engine() or False
+                    if sapi:
+                        self._set(True)
+                        try:
+                            sapi.say(text)
+                            sapi.runAndWait()
+                        except Exception:
+                            pass
+            finally:
+                self._set(False)
