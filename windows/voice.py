@@ -1,6 +1,8 @@
 """Распознавание речи (Google Speech, русский) и озвучка ответов."""
 import queue
 import urllib.error
+
+import wake as wakeword
 import threading
 import time
 
@@ -113,16 +115,15 @@ class VoiceListener:
                         time.sleep(3)
                         continue
                     self._manual_next = False
-                    wake = _norm(self.wake_word_fn())
-                    low = _norm(text)
-                    if not manual and wake and low.strip(" ,.!") == wake:
-                        # сказали только «компьютер» — ждём команду следующей фразой
+                    found, rest = wakeword.split(text, self.wake_word_fn() or "")
+                    if not manual and found and not rest:
+                        # сказали только ключевое слово — ждём команду следующей фразой
                         self._manual_next = True
                         self.on_state("listening", "Слушаю…")
                         continue
-                    if manual or (wake and low.startswith(wake)):
+                    if manual or found:
                         self.on_state("idle", "Жду ключевое слово…")
-                        self.on_text(text, manual)
+                        self.on_text(rest if found else text, manual)
         except OSError:
             self.on_state("error", "Микрофон не найден")
         except Exception as e:

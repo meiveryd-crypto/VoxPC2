@@ -4,6 +4,7 @@ import difflib
 import re
 
 import actions
+import wake as wakeword
 import programs
 
 OPEN_WORDS = ("открой", "открыть", "запусти", "запустить", "включи", "включить",
@@ -107,9 +108,9 @@ class CommandProcessor:
     def execute(self, text: str, strict: bool = False):
         """strict=True: выполнять только короткие однозначные команды (остальное — для Claude)."""
         t = normalize(text)
-        wake = normalize(self.config.get("wake_word") or "")
-        if wake and t.startswith(wake):
-            t = t[len(wake):].strip(" ,")
+        found, rest = wakeword.split(text, self.config.get("wake_word") or "")
+        if found:
+            t = normalize(rest)
         if not t:
             return fail("Пустая команда")
         if strict and (len(t.split()) > 5 or re.search(r"\b(и|потом|затем|а также|после)\b", t)):

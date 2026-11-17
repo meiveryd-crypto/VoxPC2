@@ -81,7 +81,8 @@ class App(ctk.CTk):
         self.server = ApiServer(cfg, self.processor,
                                 on_event=lambda src, text, res: self.events.put(("result", (src, text, res))),
                                 command_handler=self.handle_text,
-                                on_show=lambda: self.events.put(("show", None)))
+                                on_show=lambda: self.events.put(("show", None)),
+                                on_quit=lambda: self.events.put(("quit", None)))
         self.relay = relay.Relay(cfg)
         self.tunnel = tunnel.Tunnel(lambda: cfg.get("port"),
                                     on_status=lambda st, url="": self.events.put(("tunnel", (st, url))))
@@ -415,7 +416,7 @@ class HomePage(ctk.CTkFrame):
         self.hint_lbl = ctk.CTkLabel(mic_card, text="", font=F(13), text_color=MUTED)
         self.hint_lbl.pack(pady=(2, 10))
         self.listen_var = ctk.BooleanVar(value=bool(app.cfg.get("always_listen")))
-        ctk.CTkSwitch(mic_card, text=f"Слушать постоянно (начинайте со слова «{app.cfg.get('wake_word')}»)",
+        ctk.CTkSwitch(mic_card, text=f"Слушать постоянно (начинайте со слова «{(app.cfg.get('wake_word') or '').split(',')[0].strip()}»)",
                       variable=self.listen_var, font=F(13), progress_color=ACCENT,
                       command=lambda: app.set_always_listen(self.listen_var.get())).pack(pady=(0, 22))
 
@@ -817,11 +818,11 @@ class SettingsPage(ctk.CTkFrame):
         c = self._card(4, "🎙  Голос", "Ключевое слово нужно в режиме постоянного прослушивания.")
         row = ctk.CTkFrame(c, fg_color="transparent")
         row.pack(fill="x", padx=20, pady=(0, 10))
-        ctk.CTkLabel(row, text="Ключевое слово", font=F(14), text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(row, text="Ключевые слова (через запятую)", font=F(14), text_color=TEXT).pack(side="left")
         self.wake = ctk.CTkEntry(row, width=200, height=36, corner_radius=10, fg_color=CARD_HI, border_width=0)
         self.wake.insert(0, cfg.get("wake_word"))
         self.wake.pack(side="left", padx=12)
-        self._btn(row, "Сохранить", lambda: (cfg.set("wake_word", self.wake.get().strip().lower() or "компьютер"),
+        self._btn(row, "Сохранить", lambda: (cfg.set("wake_word", ", ".join(__import__("wake").words(self.wake.get())) or "компьютер"),
                                              self._toast("Ключевое слово сохранено")))
         self.tts_var = ctk.BooleanVar(value=bool(cfg.get("tts")))
         self._switch(c, "Озвучивать ответы голосом", self.tts_var, lambda: cfg.set("tts", self.tts_var.get()))

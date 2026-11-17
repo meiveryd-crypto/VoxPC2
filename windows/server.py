@@ -24,12 +24,13 @@ DISCOVER_MAGIC = b"VOXPC_DISCOVER"
 
 
 class ApiServer:
-    def __init__(self, config, processor, on_event=None, command_handler=None, on_show=None):
+    def __init__(self, config, processor, on_event=None, command_handler=None, on_show=None, on_quit=None):
         self.config = config
         self.processor = processor
         self.on_event = on_event or (lambda *a: None)
         self.command_handler = command_handler or processor.execute
         self.on_show = on_show or (lambda: None)
+        self.on_quit = on_quit or (lambda: None)
         self.mcp = McpHandler(config, processor, self.on_event)
         self.httpd = None
         self._fails = {}          # ip -> [время неудачных попыток]
@@ -106,9 +107,9 @@ class ApiServer:
                 path = self._path()
                 if not self._guard(path):
                     return
-                if path == "/local/show":
-                    if self.client_address[0] == "127.0.0.1":
-                        api.on_show()
+                if path in ("/local/show", "/local/quit"):
+                    if self.client_address[0] == "127.0.0.1" and not self._via_tunnel():
+                        (api.on_show if path == "/local/show" else api.on_quit)()
                         return self._send(200, {"ok": True})
                     return self._send(403, {"ok": False})
                 if path.startswith("/mcp/"):
