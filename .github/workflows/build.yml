@@ -51,3 +51,23 @@ jobs:
         with:
           name: VoxPC-Android
           path: android/app/build/outputs/apk/release/*.apk
+
+  # Публикует свежие сборки на постоянной странице загрузки:
+  # https://github.com/<owner>/<repo>/releases/latest
+  release:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp VoxPC-Android/*.apk VoxPC.apk
+          (cd VoxPC-Windows && zip -j ../VoxPC-Windows.zip VoxPC.exe VoxPC-MCP.exe)
+          gh release delete latest -y --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create latest VoxPC.apk VoxPC-Windows.zip -R "$GITHUB_REPOSITORY" --latest \
+            --target "$GITHUB_SHA" -t "VoxPC — последняя сборка" \
+            -n "Android: VoxPC.apk. Windows: VoxPC-Windows.zip (VoxPC.exe и VoxPC-MCP.exe держите в одной папке)."
