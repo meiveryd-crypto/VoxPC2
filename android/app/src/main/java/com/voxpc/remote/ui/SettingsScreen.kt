@@ -28,6 +28,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +61,7 @@ fun SettingsScreen(
     onPick: (FoundPc) -> Unit,
     onSave: (host: String, port: String, token: String, mac: String, broadcast: String, wolPort: String) -> Unit,
     onSaveRemote: (type: String, url: String, login: String, password: String, wanHost: String, wanPort: String) -> Unit,
+    onRelayToggle: (Boolean) -> Unit = {},
 ) {
     var routerType by remember { mutableStateOf(prefs.routerType) }
     var routerUrl by remember { mutableStateOf(prefs.routerUrl) }
@@ -171,7 +174,7 @@ fun SettingsScreen(
             Text("Включение ПК вне дома — через роутер:", color = TextC, fontSize = 14.sp,
                 modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("none" to "Нет", "keenetic" to "Keenetic", "forward" to "Проброс порта").forEach { (k, label) ->
+                listOf("none" to "Нет", "relay" to "Телефон дома", "keenetic" to "Keenetic", "forward" to "Порт").forEach { (k, label) ->
                     Text(
                         label, color = if (routerType == k) Color.White else Muted, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.clip(RoundedCornerShape(12.dp))
@@ -181,6 +184,11 @@ fun SettingsScreen(
                 }
             }
             when (routerType) {
+                "relay" -> {
+                    Text("Второй телефон лежит дома в Wi-Fi с включённым режимом «Ретранслятор» (ниже). " +
+                        "Вне дома нажмите кнопку питания — команда уйдёт ему, а он включит ПК в домашней сети.",
+                        color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                }
                 "keenetic" -> {
                     Text("Адрес KeenDNS вашего роутера и учётная запись с доступом к веб-интерфейсу. " +
                         "MAC-адрес ПК берётся из блока выше.", color = Muted, fontSize = 12.sp,
@@ -197,6 +205,33 @@ fun SettingsScreen(
                     Field("Внешний адрес роутера (IP или домен)", wanHost, { wanHost = it }, KeyboardType.Uri)
                     Field("Внешний UDP-порт", wanPort, { wanPort = it.filter(Char::isDigit) }, KeyboardType.Number)
                 }
+            }
+        }
+
+        // --- режим ретранслятора ---
+        Card {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Этот телефон — ретранслятор", color = TextC, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                    Text(
+                        "Включите на старом телефоне, который всегда лежит дома на зарядке в Wi-Fi. " +
+                            "Он будет ждать команду и включать ПК. Сначала нажмите «Найти ПК» и введите код доступа.",
+                        color = Muted, fontSize = 12.sp,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Switch(
+                    checked = state.relayMode,
+                    onCheckedChange = { on ->
+                        onSave(host, port, token, mac, broadcast, wolPort)
+                        onRelayToggle(on)
+                    },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+                )
+            }
+            if (state.relayMode) {
+                Text(prefs.relayLast.ifBlank { "Работает в фоне. В шторке уведомлений будет значок VoxPC." },
+                    color = Ok, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
             }
         }
 

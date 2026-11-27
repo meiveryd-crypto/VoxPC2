@@ -65,6 +65,15 @@ class Prefs(context: Context) {
         get() = sp.getInt("wan_port", 9)
         set(v) = sp.edit().putInt("wan_port", v).apply()
 
+    /** Этот телефон — домашний ретранслятор для включения ПК. */
+    var relayMode: Boolean
+        get() = sp.getBoolean("relay_mode", false)
+        set(v) = sp.edit().putBoolean("relay_mode", v).apply()
+
+    var relayLast: String
+        get() = sp.getString("relay_last", "") ?: ""
+        set(v) = sp.edit().putString("relay_last", v).apply()
+
     var pcName: String
         get() = sp.getString("pc_name", "") ?: ""
         set(v) = sp.edit().putString("pc_name", v).apply()

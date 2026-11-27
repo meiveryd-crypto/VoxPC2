@@ -7,6 +7,8 @@ import com.voxpc.remote.data.Prefs
 import com.voxpc.remote.net.Discovery
 import com.voxpc.remote.net.FoundPc
 import com.voxpc.remote.net.Keenetic
+import com.voxpc.remote.net.WakeRelay
+import com.voxpc.remote.relay.RelayService
 import com.voxpc.remote.net.PcApp
 import com.voxpc.remote.net.PcClient
 import com.voxpc.remote.net.WakeOnLan
@@ -36,6 +38,7 @@ data class UiState(
     val waking: Boolean = false,
     val searching: Boolean = false,
     val searched: Boolean = false,
+    val relayMode: Boolean = false,
     val found: List<FoundPc> = emptyList(),
 )
 
@@ -47,7 +50,9 @@ private val WAKE_PHRASES = listOf(
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val prefs = Prefs(app)
     val client = PcClient(prefs)
-    private val _state = MutableStateFlow(UiState(configured = prefs.host.isNotBlank(), pcName = prefs.pcName))
+    private val _state = MutableStateFlow(
+        UiState(configured = prefs.host.isNotBlank(), pcName = prefs.pcName, relayMode = prefs.relayMode)
+    )
     val state = _state.asStateFlow()
     private var pollJob: Job? = null
     private var logId = 0L
@@ -126,6 +131,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (r.isSuccess) addLog("Роутер Keenetic разбудил ПК. Он загрузится через 15–60 секунд", true, false)
                     else addLog("Keenetic: ${r.exceptionOrNull()?.message}", false, false)
                 }
+                "relay" -> {
+                    addLog("Отправляю команду домашнему телефону-ретранслятору…", true, false)
+                    val r = WakeRelay.wake(prefs.remoteId, prefs.token) { status ->
+                        when (status) {
+                            "sent" -> addLog("Ретранслятор отправил сигнал. ПК загружается…", true, false)
+                            "online" -> addLog("ПК включился!", true, false)
+                            "denied" -> addLog("Ретранслятор отклонил команду: разные коды доступа", false, false)
+                            "error" -> addLog("Ретранслятор не смог отправить сигнал", false, false)
+                        }
+                    }
+                    if (r.isFailure) addLog("Ретранслятор: ${r.exceptionOrNull()?.message}", false, false)
+                    else if (r.getOrNull() == false)
+                        addLog("Домашний телефон не ответил. Он включён, в Wi-Fi и режим ретранслятора включён?", false, false)
+                }
                 "forward" -> if (prefs.wanHost.isNotBlank()) {
                     val r = WakeOnLan.send(prefs.mac, prefs.wanHost, prefs.wanPort, prefs.wanHost)
                     if (r.isSuccess) addLog("Сигнал включения отправлен на роутер (${prefs.wanHost})", true, false)
@@ -180,6 +199,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.routerPassword = password
         prefs.wanHost = wanHost
         prefs.wanPort = wanPort.toIntOrNull() ?: 9
+    }
+
+    fun setRelayMode(on: Boolean) {
+        prefs.relayMode = on
+        val ctx = getApplication<Application>()
+        if (on) RelayService.start(ctx) else RelayService.stop(ctx)
+        _state.update { it.copy(relayMode = on) }
     }
 
     fun clearLog() = _state.update { it.copy(log = emptyList()) }

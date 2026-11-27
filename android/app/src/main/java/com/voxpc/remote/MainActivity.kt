@@ -1,6 +1,12 @@
 package com.voxpc.remote
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
@@ -52,11 +58,26 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         vm.startPolling()
+        if (vm.prefs.relayMode) runCatching { com.voxpc.remote.relay.RelayService.start(this) }
     }
 
     override fun onStop() {
         super.onStop()
         vm.stopPolling()
+    }
+}
+
+/** Просит Android не усыплять приложение, чтобы ретранслятор всегда был на связи. */
+@SuppressLint("BatteryLife")
+private fun requestNoBatteryLimits(context: android.content.Context) {
+    val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+    if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
     }
 }
 
@@ -66,6 +87,14 @@ private fun AppRoot(vm: MainViewModel, shortcut: String?, onShortcutHandled: () 
     var screen by rememberSaveable { mutableStateOf("home") }
     val context = LocalContext.current
 
+    val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val onRelayToggle: (Boolean) -> Unit = { on ->
+        vm.setRelayMode(on)
+        if (on) {
+            if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            requestNoBatteryLimits(context)
+        }
+    }
     val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val text = res.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (res.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) vm.onVoice(text)
@@ -103,6 +132,7 @@ private fun AppRoot(vm: MainViewModel, shortcut: String?, onShortcutHandled: () 
             onPick = vm::applyFound,
             onSave = vm::save,
             onSaveRemote = vm::saveRemote,
+            onRelayToggle = onRelayToggle,
         )
         else -> HomeScreen(
             state = state,
